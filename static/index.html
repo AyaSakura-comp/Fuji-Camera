@@ -119,6 +119,11 @@
     padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 12px; font-size:20px; font-weight:700;
     background:linear-gradient(#000,rgba(0,0,0,.85),transparent); display:flex; align-items:center; gap:10px; }
   .g-title small { font-size:12px; font-weight:500; color:#8e8e93; }
+  .g-upload { margin-left:auto; width:34px; height:34px; border-radius:50%; border:none;
+    background:rgba(255,255,255,.14); color:#fff; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .g-upload:active { background:rgba(255,255,255,.28); transform:scale(.92); }
+  .g-upload svg { width:20px; height:20px; }
   .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; }
   .cell { position:relative; aspect-ratio:1; background:#1c1c1e; overflow:hidden; border-radius:2px; }
   .cell img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -222,7 +227,13 @@
 <!-- ================= GALLERY ================= -->
 <div class="view" id="galView">
   <div id="gallery">
-    <div class="g-title">相簿 <small id="galCount"></small></div>
+    <div class="g-title">相簿 <small id="galCount"></small>
+      <button class="g-upload" id="galUploadBtn" aria-label="上傳照片" title="上傳照片">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <input type="file" id="galUpload" accept="image/*" multiple hidden>
+    </div>
     <div class="grid" id="grid"></div>
     <div class="empty hidden" id="galEmpty">還沒有照片，去拍幾張吧 📷</div>
   </div>
@@ -346,8 +357,29 @@
       zoomWrap.classList.add('show');
     }
   }
-  zoom.oninput=()=>{ zoomVal.textContent=Number(zoom.value).toFixed(1)+'×';
-    if(curTrack) curTrack.applyConstraints({advanced:[{zoom:Number(zoom.value)}]}).catch(()=>{}); };
+  function applyZoom(z){
+    const mn=Number(zoom.min), mx=Number(zoom.max);
+    z=Math.max(mn,Math.min(mx,z));
+    zoom.value=z; zoomVal.textContent=z.toFixed(1)+'×';
+    if(curTrack) curTrack.applyConstraints({advanced:[{zoom:z}]}).catch(()=>{});
+  }
+  zoom.oninput=()=>applyZoom(Number(zoom.value));
+
+  // two-finger pinch on the preview → zoom the lens, kept in sync with the bar
+  let pinchDist0=0, pinchZoom0=1;
+  const _d2=t=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  camView.addEventListener('touchstart',e=>{
+    if(e.touches.length===2 && zoomWrap.classList.contains('show')){
+      pinchDist0=_d2(e.touches); pinchZoom0=Number(zoom.value);
+    }
+  },{passive:false});
+  camView.addEventListener('touchmove',e=>{
+    if(e.touches.length===2 && pinchDist0>0 && zoomWrap.classList.contains('show')){
+      e.preventDefault();
+      applyZoom(pinchZoom0 * (_d2(e.touches)/pinchDist0));
+    }
+  },{passive:false});
+  camView.addEventListener('touchend',e=>{ if(e.touches.length<2) pinchDist0=0; });
 
   async function startCamera(opts){
     opts=opts||{}; hideMsg(); stopStream();
@@ -459,6 +491,21 @@
     catch(_){}
   }
 
+  // upload any photo(s) from the device into the pool (processed the same way)
+  const galUploadBtn=$('galUploadBtn'), galUpload=$('galUpload');
+  galUploadBtn.onclick=()=>galUpload.click();
+  galUpload.onchange=async()=>{
+    const files=[...galUpload.files]; galUpload.value='';
+    if(!files.length) return;
+    galUploadBtn.disabled=true; galUploadBtn.style.opacity='.5';
+    for(const f of files){
+      const fd=new FormData(); fd.append('file', f, f.name||'upload.jpg');
+      try{ await fetch('/api/upload',{method:'POST',body:fd}); }catch(_){}
+    }
+    galUploadBtn.disabled=false; galUploadBtn.style.opacity='1';
+    grid.dataset.sig=''; loadGallery(); refreshCounts();
+  };
+
   // =====================================================================
   //  FULLSCREEN VIEWER  (swipe between photos, pinch zoom, double-tap)
   // =====================================================================
@@ -510,13 +557,16 @@
     vDownload.setAttribute('download','fuji_'+p.id+'.jpg');
     updateOrigBtn(p);
   }
-  // Save the processed film version. On iPhone, open the iOS share sheet (Web Share API)
-  // so the user can "Save Image" straight into Photos/相簿; elsewhere fall back to a file
-  // download. Always the processed image + cache-busted (never the original).
+  // Save what you're currently viewing: the original when 看原圖 is active, else the
+  // processed film version. On iPhone open the iOS share sheet (Save to Photos);
+  // elsewhere fall back to a file download. Cache-busted so no stale copy leaks.
   vDownload.addEventListener('click', async e=>{
     e.preventDefault();
     const p=lastPhotos[vIndex]; if(!p) return;
-    const url='/api/file/'+p.id+'/full?dl='+Date.now(), name='fuji_'+p.id+'.jpg';
+    const s=cur(), showOrig = !!(s && s.showingOrig);
+    const kind = showOrig ? 'orig' : 'full';
+    const url='/api/file/'+p.id+'/'+kind+'?dl='+Date.now();
+    const name='fuji_'+p.id+(showOrig?'_orig':'')+'.jpg';
     let blob;
     try{ blob=await (await fetch(url,{cache:'no-store'})).blob(); }
     catch(_){ location.href=url; return; }
