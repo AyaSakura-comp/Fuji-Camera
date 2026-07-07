@@ -402,11 +402,17 @@
   // ---------- capture + upload ----------
   function capture(){
     if(!video.videoWidth) return;
-    const w=video.videoWidth,h=video.videoHeight;
-    canvas.width=w; canvas.height=h;
+    const vw=video.videoWidth, vh=video.videoHeight;      // native camera frame
+    // capture exactly the visible preview (object-fit:cover crop), so the photo's
+    // orientation follows how the phone is held: portrait preview -> portrait photo.
+    const cw=video.clientWidth||vw, ch=video.clientHeight||vh;
+    const scale=Math.max(cw/vw, ch/vh);
+    const sw=Math.min(vw, Math.round(cw/scale)), sh=Math.min(vh, Math.round(ch/scale));
+    const sx=Math.round((vw-sw)/2), sy=Math.round((vh-sh)/2);
+    canvas.width=sw; canvas.height=sh;
     const ctx=canvas.getContext('2d');
-    if(facing==='user'){ctx.translate(w,0);ctx.scale(-1,1);}
-    ctx.drawImage(video,0,0,w,h);
+    if(facing==='user'){ctx.translate(sw,0);ctx.scale(-1,1);}
+    ctx.drawImage(video, sx,sy,sw,sh, 0,0,sw,sh);
     flash.classList.remove('fire'); void flash.offsetWidth; flash.classList.add('fire');
     canvas.toBlob(blob=>{ if(blob) uploadBlob(blob); },'image/jpeg',0.92);
   }
