@@ -159,7 +159,10 @@ docker compose up -d --build
 - The sidecar registers a **new Tailscale node `fuji-camera`** → the app is served at
   `https://fuji-camera.<your-tailnet>.ts.net/` (a fresh subdomain, distinct from the host's `aya.*`).
 - To make it **public on the internet**, set `AllowFunnel` to `true` in `ts-serve.json` (and enable
-  Funnel in the tailnet ACL). Otherwise it's tailnet-only.
+  Funnel in the tailnet ACL). Otherwise it's tailnet-only. **When public, set a passcode** (below).
+- **Passcode gate**: set `FUJI_PASSCODE` (in `.env`) → every request needs a valid signed cookie; a
+  small login page collects the passcode and sets a 30-day cookie (icons/manifest stay open so the
+  PWA works). Unset = no gate (fine for tailnet-only). Implemented as a middleware in `server.py`.
 - The container reaches the host via `host.docker.internal` (`extra_hosts: host-gateway`);
   `FUJI_GEN_URL=http://host.docker.internal:7863`. `gen_service.py` binds `0.0.0.0` for this.
 - `./data` is bind-mounted so the picture pool persists across container restarts.

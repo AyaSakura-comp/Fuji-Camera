@@ -275,7 +275,12 @@
     galView.classList.toggle('active',!cam);
     tabCam.classList.toggle('active',cam);
     tabGal.classList.toggle('active',!cam);
-    if(!cam){ loadGallery(); }
+    if(!cam){
+      stopStream();          // release the camera while browsing the gallery
+      loadGallery();
+    } else if(!camBottom.classList.contains('hidden') && stream===null){
+      startCamera(curDeviceId?{deviceId:curDeviceId}:{});   // reopen when returning
+    }
   }
   tabCam.onclick=()=>show('cam');
   tabGal.onclick=()=>show('gal');

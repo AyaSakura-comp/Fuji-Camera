@@ -17,10 +17,12 @@ services:
     user: "1000:1000"                          # write ./data as the host user (uid 1000)
     environment:
       - FUJI_GEN_URL=http://host.docker.internal:7863
+      - FUJI_PASSCODE=${FUJI_PASSCODE:-}       # set (in .env) to require a passcode; empty = open
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach the host's gen_service
     volumes:
       - ./data:/app/data                       # persist the picture pool
+      - ./static:/app/static:ro                # live frontend edits (no rebuild needed)
     expose:
       - "8090"
 

@@ -20,8 +20,12 @@ import uuid
 from pathlib import Path
 from queue import Queue
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+import hashlib
+import hmac
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
+from fastapi.responses import (FileResponse, JSONResponse, Response,
+                               HTMLResponse, RedirectResponse)
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
@@ -48,6 +52,39 @@ FLUX_CWD    = HOME / "models-work/flux2"
 # subprocess, so running server.py directly on the box still works standalone.
 GEN_URL   = os.environ.get("FUJI_GEN_URL", "http://127.0.0.1:7863").rstrip("/")
 GEN_STEPS = os.environ.get("FUJI_GEN_STEPS", "2")
+
+# Optional shared passcode gate (for public/Funnel exposure). When FUJI_PASSCODE is
+# set, every request needs a valid signed cookie; unauthenticated visitors get a
+# small login page. Unset = no gate (fine for tailnet-only use).
+PASSCODE    = os.environ.get("FUJI_PASSCODE", "")
+COOKIE_NAME = "fuji_auth"
+# open paths that never require auth (login POST + PWA icons/manifest)
+_OPEN_PATHS = {"/auth", "/manifest.webmanifest", "/favicon-32.png",
+               "/apple-touch-icon.png", "/icon-192.png", "/icon-512.png"}
+
+def _auth_token() -> str:
+    return hmac.new(b"fuji-camera-gate", PASSCODE.encode(), hashlib.sha256).hexdigest()
+
+_LOGIN_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Fuji 相機</title><style>
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:#000;color:#fff;
+font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+.wrap{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+justify-content:center;gap:18px;padding:24px;text-align:center}
+h1{font-size:22px;font-weight:600;margin:0}p{color:#8a8a8e;font-size:14px;margin:0}
+form{display:flex;flex-direction:column;gap:12px;width:100%;max-width:280px;margin-top:6px}
+input{font-size:20px;text-align:center;letter-spacing:6px;padding:14px;border-radius:14px;
+border:none;background:#1c1c1e;color:#fff;outline:none}
+button{padding:14px;border:none;border-radius:24px;background:#fff;color:#000;
+font-size:17px;font-weight:600;cursor:pointer}
+.err{color:#ff453a;font-size:13px;min-height:16px}</style></head>
+<body><div class="wrap"><div style="font-size:44px">📷</div>
+<h1>Fuji 相機</h1><p>請輸入密碼</p>
+<form method="post" action="/auth" autocomplete="off">
+<input name="passcode" type="password" inputmode="numeric" autofocus placeholder="••••">
+<div class="err">%ERR%</div>
+<button type="submit">進入</button></form></div></body></html>"""
 
 THUMB_MAX = 500     # px, longest edge for gallery thumbnails
 FULL_MAX  = 2200    # px, longest edge for the full-screen viewer image
@@ -84,6 +121,8 @@ def make_thumb(src: Path, dst: Path, longest: int):
 
 # ---------------------------------------------------------------- worker queue
 work_q: "Queue[str]" = Queue()
+
+_cancelled = set()   # pids deleted while still queued / processing (guarded by _db_lock)
 
 def enqueue(pid):
     work_q.put(pid)
@@ -139,7 +178,8 @@ def process_one(pid):
     with _db_lock:
         db = load_db()
         p = find(db, pid)
-        if not p or p["status"] == "done":
+        if not p or p["status"] == "done" or pid in _cancelled:  # deleted while queued -> skip
+            _cancelled.discard(pid)
             return
         p["status"] = "processing"
         p["started"] = time.time()
@@ -149,6 +189,12 @@ def process_one(pid):
     try:
         orig_bytes = (ORIG / p["orig"]).read_bytes()
         result_bytes = run_film(orig_bytes)
+
+        # deleted while it was processing? discard the result, write nothing.
+        with _db_lock:
+            if find(load_db(), pid) is None or pid in _cancelled:
+                _cancelled.discard(pid)
+                return
 
         # store a viewer-sized JPEG + a thumbnail of the result
         res_name   = f"{pid}.jpg"
@@ -196,6 +242,25 @@ def worker_loop():
 
 # ---------------------------------------------------------------- app
 app = FastAPI(title="Fuji Camera")
+
+@app.middleware("http")
+async def _passcode_gate(request: Request, call_next):
+    if not PASSCODE or request.url.path in _OPEN_PATHS:
+        return await call_next(request)
+    if request.cookies.get(COOKIE_NAME) == _auth_token():
+        return await call_next(request)
+    if request.url.path.startswith("/api"):
+        return JSONResponse({"error": "auth required"}, status_code=401)
+    return HTMLResponse(_LOGIN_HTML.replace("%ERR%", ""), status_code=401)
+
+@app.post("/auth")
+async def auth(passcode: str = Form("")):
+    if PASSCODE and hmac.compare_digest(passcode, PASSCODE):
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(COOKIE_NAME, _auth_token(), max_age=30 * 24 * 3600,
+                        httponly=True, samesite="lax", secure=True)
+        return resp
+    return HTMLResponse(_LOGIN_HTML.replace("%ERR%", "密碼錯誤"), status_code=401)
 
 @app.on_event("startup")
 def _startup():
@@ -305,6 +370,10 @@ def delete_photo(pid: str):
             raise HTTPException(404, "no such photo")
         db["photos"] = [x for x in db["photos"] if x["id"] != pid]
         save_db(db)
+        # if it's still queued/processing, mark it so the worker skips it and
+        # discards any in-flight result instead of resurrecting the files
+        if p.get("status") in ("pending", "processing"):
+            _cancelled.add(pid)
     for f in (ORIG / p.get("orig", ""), THUMB / p.get("orig_thumb", ""),
               RESULT / p.get("result", ""), THUMB / p.get("result_thumb", "")):
         try:
