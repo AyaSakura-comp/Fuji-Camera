@@ -34,13 +34,13 @@
     background:rgba(0,0,0,0.55); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
     border-top:0.5px solid rgba(255,255,255,0.15);
   }
-  .tab { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
-         gap:3px; font-size:10.5px; letter-spacing:.5px; color:#8a8a8e; cursor:pointer;
-         transition:color .15s; }
+  .tab { position:relative; flex:1; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; gap:3px; font-size:10.5px; letter-spacing:.5px; color:#8a8a8e;
+         cursor:pointer; transition:color .15s; }
   .tab.active { color:#fff; }
   .tab svg { width:25px; height:25px; display:block; }
   .badge {
-    position:absolute; top:6px; margin-left:26px; min-width:16px; height:16px; padding:0 4px;
+    position:absolute; top:6px; left:calc(50% + 6px); min-width:16px; height:16px; padding:0 4px;
     background:#ff3b30; color:#fff; font-size:10px; font-weight:700; line-height:16px;
     border-radius:8px; text-align:center; display:none;
   }
