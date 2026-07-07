@@ -83,17 +83,37 @@
   .shutter:active { background:#ddd; }
   .shutter.burst { background:#ff3b30; }
 
-  /* landscape: move the shutter cluster to the right edge (like the iPhone camera) */
+  /* landscape (like the iPhone camera):
+       far-right  = tab nav (拍照/相簿) as a vertical bar
+       just left  = shutter cluster (switch/shutter/burst) vertical, centred
+       left edge  = zoom as a VERTICAL slider
+       bottom     = lens picker (centred, clear of the right bars)
+       top-left   = processing pill + recent strip                                */
   @media (orientation: landscape) {
-    .cam-bottom {
-      left:auto; bottom:auto; top:50%;
-      right:calc(env(safe-area-inset-right,0px) + 14px);
-      transform:translateY(-50%);
-      flex-direction:column; align-items:flex-end; gap:10px; width:auto;
+    .tabbar {
+      top:0; bottom:0; right:0; left:auto; height:auto; width:74px;
+      padding:0 env(safe-area-inset-right,0px) 0 0;
+      flex-direction:column; justify-content:center; gap:30px;
+      border-top:none; border-left:0.5px solid rgba(255,255,255,0.15);
     }
-    .cam-controls { flex-direction:column; gap:20px; }
-    .lenses { max-width:56vw; }
-    .zoomWrap { width:210px; max-width:48vw; }
+    .cam-controls {
+      position:fixed; z-index:11;
+      right:calc(74px + env(safe-area-inset-right,0px) + 18px);
+      top:50%; transform:translateY(-50%);
+      flex-direction:column; gap:22px;
+    }
+    .cam-bottom {
+      left:0; right:74px; top:auto;
+      bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
+      transform:none; flex-direction:column; align-items:center; gap:10px; width:auto;
+    }
+    .zoomWrap {                              /* vertical slider on the left edge */
+      position:fixed; z-index:11; width:220px;
+      left:calc(env(safe-area-inset-left,0px) + 8px); top:50%;
+      transform:translate(-50%,-50%) rotate(-90deg); transform-origin:center;
+      margin-left:110px;                     /* recenter after the -90° rotation */
+    }
+    .strip { margin-left:12px; }             /* recent captures stay top-left */
   }
 
   /* recent-capture strip + processing counter */
