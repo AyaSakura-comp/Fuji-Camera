@@ -168,21 +168,27 @@ docker compose up -d --build
 
 ## Running / ops
 
-Systemd **user** units (linger is on, so they survive reboot):
+**LIVE deployment = Docker** (`https://fuji-camera.crayfish-monitor.ts.net/`). The old host-only path
+(`fuji-camera.service` on `:8090` + `aya.*` serve) is **stopped/disabled** — don't run both (shared
+`./data` + single GPU). Restart everything with the skill: `bash ~/.hermes/skills/restart-fuji-camera/scripts/restart.sh`.
+
+Systemd **user** units (linger on, survive reboot):
 
 ```bash
-systemctl --user restart fuji-camera        # the server (always on)
-systemctl --user status  fuji-camera
-journalctl --user -u fuji-camera -f
-
-# Tailscale HTTPS (persists across reboot; only needed once):
-sudo tailscale serve --bg --https=443 http://127.0.0.1:8090
+systemctl --user restart fuji-gen.service            # HOST GPU gen service (:7863)
+systemctl --user restart fuji-camera-docker.service  # docker compose up -d (app + tailscale)
+#   or directly:  cd ~/src/fuji_camera && docker compose up -d
+docker compose logs --tail=40                         # app/tailscale logs
+journalctl --user -u fuji-gen -n 40 --no-pager        # gen service logs
 ```
 
-- `~/.config/systemd/user/fuji-camera.service` — the server (enabled).
-- `~/.config/systemd/user/fuji-film-daemon.service` — the warm daemon (**disabled**).
-- Static frontend edits are live on refresh (StaticFiles reads disk per request) — no restart needed.
-  Restart only for `server.py` changes.
+- `~/.config/systemd/user/fuji-gen.service` — host GPU generation service (**enabled**).
+- `~/.config/systemd/user/fuji-camera-docker.service` — wraps `docker compose up/down` (**enabled**).
+- `~/.config/systemd/user/fuji-camera.service` — old host-only server (**disabled**, superseded).
+- `~/.config/systemd/user/fuji-film-daemon.service` — the warm daemon (**disabled**, see below).
+- Restart order matters: **app before the ts sidecar** (shares its netns); the skill/script handles it.
+- Static frontend edits (`static/index.html`) are live on refresh — no restart. For `server.py` changes
+  rebuild the image: `docker compose up -d --build`. For `gen_service.py`: `systemctl --user restart fuji-gen`.
 
 ## Frontend notes (static/index.html)
 
