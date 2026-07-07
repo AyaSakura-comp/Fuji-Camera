@@ -73,6 +73,57 @@ replicates the RefControl flow by importing `create_image`'s helpers.
 the denoise dominates. Keeping it resident holds ~33GB and forces `qwen-lcpp` off (OOM). So it is
 `disable`d. Only re-enable if you have a reason to hold FLUX warm AND have freed the memory.
 
+## Deploy from scratch
+
+**Prerequisites**
+- The **create-image FLUX.2 skill** must already be deployed on the box — this app shells out to it and
+  does not bundle any model. It expects:
+  - script: `~/.hermes/skills/create-image/scripts/create_image.py`
+  - FLUX venv (torch+diffusers, ROCm): `~/models-work/flux2/.venv-rocm72`
+  - LoRAs present under `~/models-work/flux2/loras/` (`refcontrol_klein9b_depth`, `analog_redmond`).
+  Sanity check: `~/models-work/flux2/.venv-rocm72/bin/python ~/.hermes/skills/create-image/scripts/create_image.py "底片風" --refcontrol --steps 2 --image some.jpg`
+- **System python3** (the server itself is light) with: `fastapi uvicorn pillow python-multipart`
+  (`pip3 install --user fastapi uvicorn pillow python-multipart` if missing).
+- **Tailscale** up and logged in (for HTTPS; iOS camera needs it).
+
+**Steps**
+```bash
+# 1. clone
+git clone git@github.com:AyaSakura-comp/Fuji-Camera.git ~/src/fuji_camera
+
+# 2. smoke-test the server (Ctrl-C after it says "Application startup complete")
+cd ~/src/fuji_camera && python3 -m uvicorn server:app --host 127.0.0.1 --port 8090
+
+# 3. install as a systemd --user service (survives reboot)
+loginctl enable-linger "$USER"                       # once, so user services run without a login
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/fuji-camera.service <<'UNIT'
+[Unit]
+Description=Fuji Camera picture-pool server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/fuji_camera
+ExecStart=/usr/bin/python3 -m uvicorn server:app --host 127.0.0.1 --port 8090
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNIT
+systemctl --user daemon-reload
+systemctl --user enable --now fuji-camera.service
+
+# 4. expose over Tailscale HTTPS (persists across reboots; run once)
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8090
+
+# 5. open the printed https URL (e.g. https://<host>.<tailnet>.ts.net/) on the iPhone
+```
+
+`data/` (originals/results/thumbs/db.json) is created on first run. The warm daemon
+(`fuji-film-daemon.service`) is optional and off by default — see "Warm daemon".
+
 ## Running / ops
 
 Systemd **user** units (linger is on, so they survive reboot):
