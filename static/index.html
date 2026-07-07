@@ -238,7 +238,7 @@
   <div id="vstage"><div id="vtrack"></div></div>
   <div class="v-actions">
     <div class="v-btn" id="vOrig">看原圖</div>
-    <a class="v-btn" id="vDownload" download="fuji.jpg">⬇︎ 下載</a>
+    <a class="v-btn" id="vDownload" download="fuji.jpg">⬇︎ 儲存</a>
     <div class="v-btn danger" id="vDelete">刪除</div>
   </div>
 </div>
@@ -505,19 +505,27 @@
     vDownload.setAttribute('download','fuji_'+p.id+'.jpg');
     updateOrigBtn(p);
   }
-  // ALWAYS download the processed film version, regardless of 看原圖 / hold-compare state,
-  // and cache-bust so a copy cached while the photo was still processing (= original) can't leak.
+  // Save the processed film version. On iPhone, open the iOS share sheet (Web Share API)
+  // so the user can "Save Image" straight into Photos/相簿; elsewhere fall back to a file
+  // download. Always the processed image + cache-busted (never the original).
   vDownload.addEventListener('click', async e=>{
     e.preventDefault();
     const p=lastPhotos[vIndex]; if(!p) return;
     const url='/api/file/'+p.id+'/full?dl='+Date.now(), name='fuji_'+p.id+'.jpg';
-    try{
-      const r=await fetch(url,{cache:'no-store'}); const b=await r.blob();
-      const u=URL.createObjectURL(b);
-      const a=document.createElement('a'); a.href=u; a.download=name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=>URL.revokeObjectURL(u),5000);
-    }catch(_){ location.href=url; }
+    let blob;
+    try{ blob=await (await fetch(url,{cache:'no-store'})).blob(); }
+    catch(_){ location.href=url; return; }
+    const file=new File([blob], name, {type: blob.type||'image/jpeg'});
+    // iOS Safari: share sheet -> 儲存影像 (into Photos)
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      try{ await navigator.share({files:[file]}); return; }
+      catch(err){ if(err && err.name==='AbortError') return; /* else fall through to download */ }
+    }
+    // desktop / unsupported: normal file download
+    const u=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=u; a.download=name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(u),5000);
   });
   function cur(){ return slides[vIndex]; }
   function resetZoom(i){ const s=slides[i]; if(s){ s.scale=1; s.tx=0; s.ty=0; s.img.style.transition='none'; imgTransform(s); } }
