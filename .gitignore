@@ -1,0 +1,11 @@
+# runtime picture pool (private photos + state) — never commit
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# misc
+.playwright-mcp/
+*.log

@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Fuji 相機</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent;
+    -webkit-touch-callout:none; }
+  img { -webkit-touch-callout:none; -webkit-user-drag:none; -webkit-user-select:none; user-select:none;
+    pointer-events:none; }
+  html, body {
+    height:100%; background:#000; overflow:hidden; color:#fff;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    -webkit-user-select:none; user-select:none;
+  }
+  .view { position:absolute; inset:0; display:none; }
+  .view.active { display:block; }
+
+  /* ---------- tab bar ---------- */
+  .tabbar {
+    position:absolute; left:0; right:0;
+    bottom:0; height:calc(env(safe-area-inset-bottom,0px) + 54px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+    display:flex; z-index:40;
+    background:rgba(0,0,0,0.55); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border-top:0.5px solid rgba(255,255,255,0.15);
+  }
+  .tab { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+         gap:3px; font-size:10.5px; letter-spacing:.5px; color:#8a8a8e; cursor:pointer;
+         transition:color .15s; }
+  .tab.active { color:#fff; }
+  .tab svg { width:25px; height:25px; display:block; }
+  .badge {
+    position:absolute; top:6px; margin-left:26px; min-width:16px; height:16px; padding:0 4px;
+    background:#ff3b30; color:#fff; font-size:10px; font-weight:700; line-height:16px;
+    border-radius:8px; text-align:center; display:none;
+  }
+  .badge.show { display:block; }
+
+  /* ---------- camera view ---------- */
+  #video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
+  #video.mirror { transform:scaleX(-1); }
+
+  .cam-bottom {
+    position:absolute; left:0; right:0;
+    bottom:calc(env(safe-area-inset-bottom,0px) + 70px);
+    z-index:10; display:flex; flex-direction:column; align-items:center; gap:14px;
+  }
+  .lenses { display:flex; gap:8px; padding:6px; background:rgba(0,0,0,0.4);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border-radius:26px;
+    max-width:92vw; overflow-x:auto; }
+  .lenses::-webkit-scrollbar { display:none; }
+  .lens { flex:0 0 auto; min-width:44px; height:40px; padding:0 12px; border:none;
+    border-radius:20px; background:transparent; color:#fff; font-size:14px; font-weight:600;
+    cursor:pointer; transition:background .15s,transform .1s; }
+  .lens:active { transform:scale(.92); }
+  .lens.active { background:#ffd60a; color:#000; }
+
+  .zoomWrap { display:none; align-items:center; gap:10px; width:78vw; max-width:340px;
+    padding:8px 14px; background:rgba(0,0,0,0.4); backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px); border-radius:22px; color:#fff; font-size:13px; }
+  .zoomWrap.show { display:flex; }
+  #zoom { flex:1; accent-color:#ffd60a; }
+
+  .cam-controls { display:flex; align-items:center; justify-content:center; gap:44px; }
+  .btn { display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.15);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:none; border-radius:50%;
+    color:#fff; cursor:pointer; transition:transform .12s,background .2s; }
+  .btn:active { transform:scale(.9); }
+  .btn.small { width:56px; height:56px; }
+  .btn svg { width:28px; height:28px; }
+  .shutter { width:76px; height:76px; background:#fff; border:4px solid rgba(255,255,255,0.4);
+    box-shadow:0 0 0 3px #000; }
+  .shutter:active { background:#ddd; }
+  .shutter.burst { background:#ff3b30; }
+
+  /* recent-capture strip + processing counter */
+  .cam-top {
+    position:absolute; top:calc(env(safe-area-inset-top,0px) + 10px); left:0; right:0;
+    z-index:12; display:flex; align-items:center; gap:8px; padding:0 12px;
+  }
+  .proc-pill { background:rgba(0,0,0,0.5); backdrop-filter:blur(10px); border-radius:16px;
+    padding:6px 12px; font-size:13px; display:flex; align-items:center; gap:6px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#ffd60a; animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .strip { margin-left:auto; display:flex; gap:6px; }
+  .strip img { width:38px; height:38px; object-fit:cover; border-radius:7px;
+    border:1.5px solid rgba(255,255,255,.6); }
+
+  #flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; z-index:15; }
+  #flash.fire { animation:flash .3s ease; }
+  @keyframes flash { 0%{opacity:.9} 100%{opacity:0} }
+
+  #start { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:20px; background:#000; z-index:20; text-align:center; padding:24px; }
+  #start h1 { font-size:22px; font-weight:600; }
+  #start p { font-size:15px; color:#999; line-height:1.5; max-width:320px; }
+  #startBtn { margin-top:8px; padding:14px 40px; font-size:17px; font-weight:600; color:#000;
+    background:#fff; border:none; border-radius:30px; cursor:pointer; }
+
+  #msg { position:absolute; top:calc(env(safe-area-inset-top,0px) + 16px); left:16px; right:16px;
+    padding:12px 16px; background:rgba(220,50,50,.92); color:#fff; border-radius:12px; font-size:14px;
+    text-align:center; z-index:30; display:none; }
+
+  /* ---------- gallery view ---------- */
+  #gallery { position:absolute; inset:0; background:#000; overflow-y:auto; overflow-x:hidden;
+    -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+    padding:calc(env(safe-area-inset-top,0px) + 52px) 3px calc(env(safe-area-inset-bottom,0px) + 66px); }
+  .g-title { position:fixed; top:0; left:0; right:0; z-index:5;
+    padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 12px; font-size:20px; font-weight:700;
+    background:linear-gradient(#000,rgba(0,0,0,.85),transparent); display:flex; align-items:center; gap:10px; }
+  .g-title small { font-size:12px; font-weight:500; color:#8e8e93; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; }
+  .cell { position:relative; aspect-ratio:1; background:#1c1c1e; overflow:hidden; border-radius:2px; }
+  .cell img { width:100%; height:100%; object-fit:cover; display:block; }
+  .cell .st { position:absolute; bottom:4px; right:4px; font-size:14px;
+    filter:drop-shadow(0 1px 2px rgba(0,0,0,.8)); }
+  .cell.processing::after, .cell.pending::after {
+    content:""; position:absolute; inset:0; background:rgba(0,0,0,.45);
+    display:flex; }
+  .cell .spin { position:absolute; inset:0; margin:auto; width:26px; height:26px;
+    border:3px solid rgba(255,255,255,.3); border-top-color:#ffd60a; border-radius:50%;
+    animation:rot 0.9s linear infinite; z-index:2; }
+  @keyframes rot { to { transform:rotate(360deg); } }
+  .empty { text-align:center; color:#666; padding:80px 20px; font-size:15px; }
+
+  /* ---------- fullscreen viewer ---------- */
+  #viewer { position:fixed; inset:0; z-index:100; background:#000; display:none; touch-action:none;
+    transition:background .2s ease; }
+  #viewer.show { display:block; }
+  #vstage { position:absolute; inset:0; overflow:hidden; }
+  #vtrack { position:absolute; top:0; left:0; height:100%; will-change:transform; }
+  .vslide { position:absolute; top:0; height:100%; display:flex; align-items:center; justify-content:center; }
+  .vslide img { max-width:100%; max-height:100%; object-fit:contain; will-change:transform;
+    transform-origin:center center; user-select:none; -webkit-user-drag:none; }
+  /* subtle scrims so the chrome never fights the photo */
+  .v-topbar { position:absolute; top:0; left:0; right:0; z-index:108;
+    height:calc(env(safe-area-inset-top,0px) + 60px); pointer-events:none;
+    background:linear-gradient(rgba(0,0,0,.5), transparent); }
+  .v-botbar { position:absolute; bottom:0; left:0; right:0; z-index:108;
+    height:calc(env(safe-area-inset-bottom,0px) + 80px); pointer-events:none;
+    background:linear-gradient(transparent, rgba(0,0,0,.55)); }
+  .v-close { position:absolute; top:calc(env(safe-area-inset-top,0px) + 10px); left:12px; z-index:110;
+    width:40px; height:40px; border-radius:50%; background:rgba(255,255,255,.14);
+    -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+    display:flex; align-items:center; justify-content:center; color:#fff;
+    font-size:19px; font-weight:400; line-height:1; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .v-close:active { background:rgba(255,255,255,.28); transform:scale(.9); }
+  .v-info { position:absolute; top:calc(env(safe-area-inset-top,0px) + 20px); left:60px; right:60px;
+    text-align:center; z-index:109; font-size:14px; font-weight:500; color:#fff; pointer-events:none;
+    text-shadow:0 1px 3px rgba(0,0,0,.6); }
+  .v-actions { position:absolute; bottom:calc(env(safe-area-inset-bottom,0px) + 20px); left:0; right:0;
+    z-index:110; display:flex; justify-content:center; gap:12px; }
+  .v-btn { padding:10px 18px; border-radius:22px; background:rgba(255,255,255,.16); color:#fff;
+    text-decoration:none; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+    font-size:14px; cursor:pointer; display:flex; align-items:center; gap:6px;
+    -webkit-tap-highlight-color:transparent; }
+  .v-btn:active { background:rgba(255,255,255,.3); }
+  .v-btn.danger { background:rgba(255,59,48,.3); }
+  .v-hold { position:absolute; top:calc(env(safe-area-inset-top,0px) + 52px); left:50%;
+    transform:translateX(-50%); z-index:109; padding:5px 14px; border-radius:16px;
+    background:rgba(0,0,0,.55); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+    color:#fff; font-size:13px; font-weight:600; letter-spacing:1px; pointer-events:none;
+    display:none; }
+  .v-hold.show { display:block; }
+
+  .hidden { display:none !important; }
+  canvas { display:none; }
+</style>
+</head>
+<body>
+
+<!-- ================= CAMERA ================= -->
+<div class="view active" id="camView">
+  <div id="start">
+    <h1>📷 Fuji 相機</h1>
+    <p>連續快拍 → 自動上傳 → 伺服器一張一張套上底片風。<br><br>（iPhone 需用 <b>https</b> 開啟，Safari 才允許相機）</p>
+    <button id="startBtn">開啟相機</button>
+  </div>
+
+  <video id="video" autoplay playsinline muted></video>
+  <div id="flash"></div>
+  <div id="msg"></div>
+
+  <div class="cam-top hidden" id="camTop">
+    <div class="proc-pill" id="procPill" style="display:none">
+      <span class="dot"></span><span id="procText">處理中 0</span>
+    </div>
+    <div class="strip" id="strip"></div>
+  </div>
+
+  <div class="cam-bottom hidden" id="camBottom">
+    <div class="lenses" id="lenses"></div>
+    <div class="zoomWrap" id="zoomWrap">
+      <span>-</span><input type="range" id="zoom" min="1" max="5" step="0.1" value="1">
+      <span id="zoomVal">1.0×</span>
+    </div>
+    <div class="cam-controls">
+      <button class="btn small" id="switchBtn" aria-label="切換前後鏡頭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+      <button class="btn shutter" id="shutterBtn" aria-label="拍照"></button>
+      <button class="btn small" id="burstBtn" aria-label="連拍" title="長按連拍">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="8" width="13" height="12" rx="2"/><path d="M8 8V6a2 2 0 0 1 2-2h4"/><path d="M19 6l2 0 0 10"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= GALLERY ================= -->
+<div class="view" id="galView">
+  <div id="gallery">
+    <div class="g-title">相簿 <small id="galCount"></small></div>
+    <div class="grid" id="grid"></div>
+    <div class="empty hidden" id="galEmpty">還沒有照片，去拍幾張吧 📷</div>
+  </div>
+</div>
+
+<!-- ================= VIEWER ================= -->
+<div id="viewer">
+  <div class="v-topbar"></div>
+  <div class="v-botbar"></div>
+  <div class="v-close" id="vClose">✕</div>
+  <div class="v-info" id="vInfo"></div>
+  <div class="v-hold" id="vHold">原圖</div>
+  <div id="vstage"><div id="vtrack"></div></div>
+  <div class="v-actions">
+    <div class="v-btn" id="vOrig">看原圖</div>
+    <a class="v-btn" id="vDownload" download="fuji.jpg">⬇︎ 下載</a>
+    <div class="v-btn danger" id="vDelete">刪除</div>
+  </div>
+</div>
+
+<!-- ================= TABBAR ================= -->
+<div class="tabbar">
+  <div class="tab active" id="tabCam">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    拍照
+  </div>
+  <div class="tab" id="tabGal">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg>
+    相簿<span class="badge" id="tabBadge"></span>
+  </div>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+
+  // block the iOS long-press "Save Image / Copy" callout (conflicts with hold-to-compare)
+  document.addEventListener('contextmenu', e=>{ if(e.target.tagName==='IMG') e.preventDefault(); }, {passive:false});
+
+  // ---------- view switching ----------
+  const camView=$('camView'), galView=$('galView');
+  const tabCam=$('tabCam'), tabGal=$('tabGal');
+  function show(which){
+    const cam = which==='cam';
+    camView.classList.toggle('active',cam);
+    galView.classList.toggle('active',!cam);
+    tabCam.classList.toggle('active',cam);
+    tabGal.classList.toggle('active',!cam);
+    if(!cam){ loadGallery(); }
+  }
+  tabCam.onclick=()=>show('cam');
+  tabGal.onclick=()=>show('gal');
+
+  // =====================================================================
+  //  CAMERA
+  // =====================================================================
+  const video=$('video'), startEl=$('start'), startBtn=$('startBtn');
+  const camTop=$('camTop'), camBottom=$('camBottom');
+  const lensesEl=$('lenses'), zoomWrap=$('zoomWrap'), zoom=$('zoom'), zoomVal=$('zoomVal');
+  const switchBtn=$('switchBtn'), shutter=$('shutterBtn'), burstBtn=$('burstBtn');
+  const canvas=$('canvas'), flash=$('flash'), msg=$('msg');
+  const strip=$('strip'), procPill=$('procPill'), procText=$('procText');
+
+  let facing='environment', stream=null, curTrack=null, curDeviceId=null, backCams=[];
+
+  const showMsg=t=>{msg.textContent=t;msg.style.display='block';};
+  const hideMsg=()=>{msg.style.display='none';};
+  function stopStream(){ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;} curTrack=null; }
+
+  function classify(label){
+    const raw=label||'', l=raw.toLowerCase();
+    if(raw.includes('三')||raw.includes('雙')||l.includes('dual')||l.includes('triple')) return 'virtual';
+    if(raw.includes('超廣角')||l.includes('ultra')) return 'ultra';
+    if(raw.includes('望遠')||l.includes('tele')) return 'tele';
+    if(raw.includes('廣角')||l.includes('wide')||raw.includes('後置')||l.includes('back')) return 'wide';
+    return 'unknown';
+  }
+  const LENS_TEXT={ultra:'.5×',wide:'1×',tele:'2×',virtual:'Auto',unknown:'·'};
+
+  async function refreshLenses(){
+    lensesEl.innerHTML='';
+    let devices=[]; try{devices=await navigator.mediaDevices.enumerateDevices();}catch(_){}
+    const cams=devices.filter(d=>d.kind==='videoinput');
+    backCams=cams.filter(d=>{const l=(d.label||'').toLowerCase();return !l.includes('front')&&!d.label.includes('前');});
+    let tagged=backCams.map(d=>({dev:d,kind:classify(d.label)}));
+    const physical=tagged.filter(t=>['ultra','wide','tele'].includes(t.kind));
+    let showL=physical.length?physical:tagged;
+    const seen=new Set();
+    showL=showL.filter(t=>{const k=t.kind+(t.kind==='unknown'?t.dev.deviceId:'');if(seen.has(k))return false;seen.add(k);return true;});
+    const order={ultra:0,wide:1,tele:2,virtual:3,unknown:4};
+    showL.sort((a,b)=>order[a.kind]-order[b.kind]);
+    if(facing==='environment'&&showL.length>1){
+      showL.forEach((t,i)=>{
+        const b=document.createElement('button');
+        b.className='lens'+(t.dev.deviceId===curDeviceId?' active':'');
+        b.textContent=t.kind==='unknown'?('#'+(i+1)):LENS_TEXT[t.kind];
+        b.onclick=()=>{curDeviceId=t.dev.deviceId;startCamera({deviceId:t.dev.deviceId});};
+        lensesEl.appendChild(b);
+      });
+      lensesEl.style.display='flex';
+    } else lensesEl.style.display='none';
+  }
+
+  function setupZoom(){
+    zoomWrap.classList.remove('show');
+    if(!curTrack||!curTrack.getCapabilities) return;
+    const caps=curTrack.getCapabilities();
+    if(caps&&caps.zoom&&caps.zoom.max>caps.zoom.min){
+      zoom.min=caps.zoom.min; zoom.max=caps.zoom.max; zoom.step=caps.zoom.step||0.1;
+      const s=curTrack.getSettings(); zoom.value=s.zoom||caps.zoom.min;
+      zoomVal.textContent=Number(zoom.value).toFixed(1)+'×';
+      zoomWrap.classList.add('show');
+    }
+  }
+  zoom.oninput=()=>{ zoomVal.textContent=Number(zoom.value).toFixed(1)+'×';
+    if(curTrack) curTrack.applyConstraints({advanced:[{zoom:Number(zoom.value)}]}).catch(()=>{}); };
+
+  async function startCamera(opts){
+    opts=opts||{}; hideMsg(); stopStream();
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ showMsg('此瀏覽器不支援相機，或非 https 連線。'); return; }
+    let vc = opts.deviceId ? {deviceId:{exact:opts.deviceId}} : {facingMode:{ideal:facing}};
+    vc.width={ideal:1920}; vc.height={ideal:1080};
+    try{ stream=await navigator.mediaDevices.getUserMedia({audio:false,video:vc}); }
+    catch(e){ try{ stream=await navigator.mediaDevices.getUserMedia({audio:false,video:true}); }
+      catch(e2){ showMsg('無法開啟相機：'+(e2.name||e2.message)); return; } }
+    video.srcObject=stream; curTrack=stream.getVideoTracks()[0];
+    const s=curTrack.getSettings?curTrack.getSettings():{}; if(s.deviceId)curDeviceId=s.deviceId;
+    video.classList.toggle('mirror',facing==='user');
+    startEl.classList.add('hidden'); camBottom.classList.remove('hidden'); camTop.classList.remove('hidden');
+    try{await video.play();}catch(_){}
+    await refreshLenses(); setupZoom();
+  }
+  startBtn.onclick=()=>startCamera();
+  switchBtn.onclick=()=>{ facing=facing==='environment'?'user':'environment'; curDeviceId=null; startCamera(); };
+
+  // ---------- capture + upload ----------
+  function capture(){
+    if(!video.videoWidth) return;
+    const w=video.videoWidth,h=video.videoHeight;
+    canvas.width=w; canvas.height=h;
+    const ctx=canvas.getContext('2d');
+    if(facing==='user'){ctx.translate(w,0);ctx.scale(-1,1);}
+    ctx.drawImage(video,0,0,w,h);
+    flash.classList.remove('fire'); void flash.offsetWidth; flash.classList.add('fire');
+    canvas.toBlob(blob=>{ if(blob) uploadBlob(blob); },'image/jpeg',0.92);
+  }
+  function addStrip(url){
+    const im=document.createElement('img'); im.src=url; strip.prepend(im);
+    while(strip.children.length>4) strip.removeChild(strip.lastChild);
+  }
+  async function uploadBlob(blob){
+    const localUrl=URL.createObjectURL(blob); addStrip(localUrl);
+    const fd=new FormData(); fd.append('file',blob,'shot.jpg');
+    try{ await fetch('/api/upload',{method:'POST',body:fd}); }
+    catch(e){ showMsg('上傳失敗：'+e.message); setTimeout(hideMsg,2500); }
+    refreshCounts();
+  }
+  shutter.onclick=capture;
+
+  // burst: hold to capture repeatedly
+  let burstTimer=null;
+  function startBurst(){ if(burstTimer)return; shutter.classList.add('burst');
+    capture(); burstTimer=setInterval(capture,700); }
+  function stopBurst(){ if(burstTimer){clearInterval(burstTimer);burstTimer=null;} shutter.classList.remove('burst'); }
+  ['mousedown','touchstart'].forEach(ev=>burstBtn.addEventListener(ev,e=>{e.preventDefault();startBurst();}));
+  ['mouseup','mouseleave','touchend','touchcancel'].forEach(ev=>burstBtn.addEventListener(ev,e=>{e.preventDefault();stopBurst();}));
+
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden && !camBottom.classList.contains('hidden') && stream===null)
+      startCamera(curDeviceId?{deviceId:curDeviceId}:{});
+  });
+
+  // =====================================================================
+  //  STATUS POLLING (counts + gallery)
+  // =====================================================================
+  let lastPhotos=[];
+  async function fetchPhotos(){
+    const r=await fetch('/api/photos'); return r.json();
+  }
+  function applyCounts(c){
+    const working=(c.pending||0)+(c.processing||0);
+    if(working>0){ procPill.style.display='flex'; procText.textContent='處理中 '+working; }
+    else procPill.style.display='none';
+    const badge=$('tabBadge');
+    if(working>0){ badge.textContent=working; badge.classList.add('show'); }
+    else badge.classList.remove('show');
+  }
+  async function refreshCounts(){
+    try{ const d=await fetchPhotos(); lastPhotos=d.photos; applyCounts(d.counts);
+      if(galView.classList.contains('active')) renderGrid(d.photos,d.counts);
+    }catch(_){}
+  }
+  setInterval(refreshCounts, 3000);
+
+  // =====================================================================
+  //  GALLERY
+  // =====================================================================
+  const grid=$('grid'), galEmpty=$('galEmpty'), galCount=$('galCount');
+  const STATUS_ICON={done:'',processing:'',pending:'⏳',error:'⚠️'};
+  function renderGrid(photos,counts){
+    galCount.textContent = photos.length? (photos.length+' 張'):'';
+    galEmpty.classList.toggle('hidden', photos.length>0);
+    // rebuild only if the id/status signature changed (avoid flph)
+    const sig=photos.map(p=>p.id+':'+p.status).join(',');
+    if(grid.dataset.sig===sig) return;
+    grid.dataset.sig=sig;
+    grid.innerHTML='';
+    photos.forEach((p,idx)=>{
+      const c=document.createElement('div'); c.className='cell '+p.status;
+      const img=document.createElement('img');
+      img.src='/api/file/'+p.id+'/thumb?t='+(p.status);   // bust cache when status flips to done
+      img.loading='lazy';
+      c.appendChild(img);
+      if(p.status==='processing'||p.status==='pending'){
+        const sp=document.createElement('div'); sp.className='spin'; c.appendChild(sp);
+      } else if(p.status==='error'){
+        const st=document.createElement('div'); st.className='st'; st.textContent='⚠️'; c.appendChild(st);
+      }
+      c.onclick=()=>openViewer(idx);
+      grid.appendChild(c);
+    });
+  }
+  async function loadGallery(){
+    try{ const d=await fetchPhotos(); lastPhotos=d.photos; applyCounts(d.counts); renderGrid(d.photos,d.counts); }
+    catch(_){}
+  }
+
+  // =====================================================================
+  //  FULLSCREEN VIEWER  (swipe between photos, pinch zoom, double-tap)
+  // =====================================================================
+  const viewer=$('viewer'), vtrack=$('vtrack'), vstage=$('vstage'), vInfo=$('vInfo');
+  const vClose=$('vClose'), vDownload=$('vDownload'), vDelete=$('vDelete'), vOrig=$('vOrig');
+  let vIndex=0, W=0, dragX=0, animating=false;
+  // one <div.vslide> per photo in a sliding window [vIndex-1 .. vIndex+1], each
+  // absolutely placed at left=i*W. The track translates by -(vIndex*W)+dragX, so
+  // neighbours are already rendered and glued to the current one while you drag.
+  const slides={};   // idx -> {el,img,scale,tx,ty,showingOrig}
+
+  function n(){ return lastPhotos.length; }
+  function statusLabel(s){ return s==='done'?'底片風 ✓':s==='processing'?'處理中…':s==='pending'?'排隊中…':s==='error'?'處理失敗':s; }
+  function updateOrigBtn(p){ vOrig.style.display=(p&&p.status==='done')?'flex':'none';
+    vOrig.textContent=(slides[vIndex]&&slides[vIndex].showingOrig)?'看成品':'看原圖'; }
+
+  function imgTransform(s){ s.img.style.transform=`translate(${s.tx}px,${s.ty}px) scale(${s.scale})`; }
+  function createSlide(i){
+    const p=lastPhotos[i]; if(!p) return;
+    const el=document.createElement('div'); el.className='vslide';
+    el.style.width=W+'px'; el.style.left=(i*W)+'px';
+    const img=document.createElement('img'); img.draggable=false;
+    img.src='/api/file/'+p.id+'/full?t='+p.status;
+    el.appendChild(img); vtrack.appendChild(el);
+    slides[i]={el,img,scale:1,tx:0,ty:0,showingOrig:false};
+    if(p.status==='done'){ const pre=new Image(); pre.src='/api/file/'+p.id+'/orig'; } // warm cache for hold-compare
+  }
+  function removeSlide(i){ const s=slides[i]; if(s){ s.el.remove(); delete slides[i]; } }
+  function ensureWindow(){
+    const lo=Math.max(0,vIndex-1), hi=Math.min(n()-1,vIndex+1);
+    for(let i=lo;i<=hi;i++) if(!slides[i]) createSlide(i);
+    Object.keys(slides).map(Number).forEach(i=>{ if(i<vIndex-1||i>vIndex+1) removeSlide(i); });
+  }
+  function layout(anim){
+    vtrack.style.transition = anim ? 'transform 260ms cubic-bezier(.22,.61,.36,1)' : 'none';
+    vtrack.style.transform = `translateX(${-vIndex*W + dragX}px)`;
+  }
+  function relayout(){   // on resize / open
+    W=vstage.clientWidth;
+    Object.keys(slides).map(Number).forEach(i=>{ const s=slides[i];
+      s.el.style.width=W+'px'; s.el.style.left=(i*W)+'px'; });
+    layout(false);
+  }
+  function updateInfo(){
+    const p=lastPhotos[vIndex]; if(!p) return;
+    vInfo.textContent=(vIndex+1)+' / '+n()+'  ·  '+statusLabel(p.status);
+    // cache-busted fallback href (the click handler below is the real path)
+    vDownload.href='/api/file/'+p.id+'/full?dl='+(p.finished||p.status);
+    vDownload.setAttribute('download','fuji_'+p.id+'.jpg');
+    updateOrigBtn(p);
+  }
+  // ALWAYS download the processed film version, regardless of 看原圖 / hold-compare state,
+  // and cache-bust so a copy cached while the photo was still processing (= original) can't leak.
+  vDownload.addEventListener('click', async e=>{
+    e.preventDefault();
+    const p=lastPhotos[vIndex]; if(!p) return;
+    const url='/api/file/'+p.id+'/full?dl='+Date.now(), name='fuji_'+p.id+'.jpg';
+    try{
+      const r=await fetch(url,{cache:'no-store'}); const b=await r.blob();
+      const u=URL.createObjectURL(b);
+      const a=document.createElement('a'); a.href=u; a.download=name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(u),5000);
+    }catch(_){ location.href=url; }
+  });
+  function cur(){ return slides[vIndex]; }
+  function resetZoom(i){ const s=slides[i]; if(s){ s.scale=1; s.tx=0; s.ty=0; s.img.style.transition='none'; imgTransform(s); } }
+
+  function openViewer(i){
+    vIndex=i; viewer.classList.add('show'); viewer.style.background='#000';
+    for(const k in slides) removeSlide(Number(k));
+    W=vstage.clientWidth; ensureWindow(); layout(false); updateInfo();
+  }
+  function closeViewer(){ viewer.classList.remove('show'); viewer.style.background='#000'; }
+  vClose.onclick=closeViewer;
+
+  vOrig.onclick=()=>{ const p=lastPhotos[vIndex], s=cur(); if(!p||p.status!=='done'||!s)return;
+    s.showingOrig=!s.showingOrig; resetZoom(vIndex);
+    s.img.src='/api/file/'+p.id+'/'+(s.showingOrig?'orig':'full')+'?t='+Date.now();
+    updateOrigBtn(p);
+  };
+
+  vDelete.onclick=async()=>{ const p=lastPhotos[vIndex]; if(!p)return;
+    vDelete.textContent='刪除中…';
+    try{ await fetch('/api/photo/'+p.id,{method:'DELETE'}); }catch(_){}
+    vDelete.textContent='刪除';
+    lastPhotos.splice(vIndex,1); grid.dataset.sig='';
+    if(n()===0){ closeViewer(); loadGallery(); return; }
+    if(vIndex>=n()) vIndex=n()-1;
+    for(const k in slides) removeSlide(Number(k));   // rebuild window around new index
+    ensureWindow(); layout(false); updateInfo(); loadGallery();
+  };
+
+  // commit a horizontal navigation (dir=+1 next, -1 prev) keeping visual continuity
+  function commit(dir){
+    const from=vIndex; vIndex+=dir; dragX+=dir*W; ensureWindow();
+    animating=true; layout(false);
+    requestAnimationFrame(()=>{ dragX=0; layout(true);
+      setTimeout(()=>{ animating=false; layout(false); resetZoom(from); updateInfo(); }, 270);
+    });
+  }
+  function snapBack(){ animating=true; requestAnimationFrame(()=>{ dragX=0; layout(true);
+    setTimeout(()=>{ animating=false; layout(false); }, 270); }); }
+
+  // ---- touch gestures ----
+  let mode=null;   // 'undecided' | 'h' | 'v' | 'pan' | 'pinch'
+  let sx=0, sy=0, lastX=0, lastY=0, lastT=0, vX=0, vY=0;
+  let startDist=0, startScale=1, startTx=0, startTy=0;
+  let lastTapT=0;
+  let holdTimer=null, holding=false;   // press-and-hold before/after compare
+  const vHold=$('vHold');
+
+  function startCompare(s){                 // show the original while held
+    const p=lastPhotos[vIndex]; if(!p||p.status!=='done'||!s) return;
+    holding=true; s.img.style.transition='none';
+    s.img.src='/api/file/'+p.id+'/orig'; vHold.classList.add('show');
+  }
+  function endCompare(s){                    // release -> back to processed
+    holding=false; vHold.classList.remove('show');
+    const p=lastPhotos[vIndex]; if(!p||!s) return;
+    s.img.style.transition='none'; s.showingOrig=false;
+    s.img.src='/api/file/'+p.id+'/full?t='+p.status; updateOrigBtn(p);
+  }
+
+  function dist(t){ const dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.hypot(dx,dy); }
+  function clampImg(s){
+    const iw=s.img.clientWidth*s.scale, ih=s.img.clientHeight*s.scale;
+    const ox=Math.max(0,(iw-W)/2), oy=Math.max(0,(ih-vstage.clientHeight)/2);
+    s.tx=Math.min(ox,Math.max(-ox,s.tx)); s.ty=Math.min(oy,Math.max(-oy,s.ty));
+  }
+
+  vstage.addEventListener('touchstart',e=>{
+    if(animating) return;
+    const s=cur(); if(!s) return;
+    s.img.style.transition='none';
+    if(e.touches.length===2){
+      mode='pinch'; startDist=dist(e.touches); startScale=s.scale;
+    } else if(e.touches.length===1){
+      const t=e.touches[0]; sx=lastX=t.clientX; sy=lastY=t.clientY; lastT=Date.now(); vX=vY=0;
+      mode = s.scale>1.01 ? 'pan' : 'undecided';
+      if(mode==='pan'){ startTx=s.tx; startTy=s.ty; }
+      // arm hold-to-compare (only for a finished photo, when not zoomed)
+      const p=lastPhotos[vIndex];
+      if(mode==='undecided' && p && p.status==='done'){
+        holdTimer=setTimeout(()=>{ holdTimer=null; startCompare(s); }, 320);
+      }
+    }
+  },{passive:false});
+
+  vstage.addEventListener('touchmove',e=>{
+    if(animating) return;
+    const s=cur(); if(!s) return;
+    if(mode==='pinch' && e.touches.length===2){
+      e.preventDefault();
+      s.scale=Math.max(1,Math.min(6,startScale*dist(e.touches)/startDist));
+      clampImg(s); imgTransform(s); return;
+    }
+    if(e.touches.length!==1) return;
+    const t=e.touches[0], dx=t.clientX-sx, dy=t.clientY-sy, now=Date.now(), dt=Math.max(1,now-lastT);
+    vX=(t.clientX-lastX)/dt; vY=(t.clientY-lastY)/dt; lastX=t.clientX; lastY=t.clientY; lastT=now;
+    if(holding){ e.preventDefault(); return; }                       // frozen on original while held
+    if(holdTimer && (Math.abs(dx)>10||Math.abs(dy)>10)){ clearTimeout(holdTimer); holdTimer=null; }
+    if(mode==='undecided'){
+      if(Math.abs(dx)>7||Math.abs(dy)>7){ mode=Math.abs(dx)>Math.abs(dy)?'h':'v'; } else return;
+    }
+    if(mode==='pan'){
+      e.preventDefault(); s.tx=startTx+dx; s.ty=startTy+dy; clampImg(s); imgTransform(s);
+    } else if(mode==='h'){
+      e.preventDefault();
+      const atEdge=(dx>0&&vIndex===0)||(dx<0&&vIndex===n()-1);
+      dragX = atEdge ? dx*0.35 : dx;   // rubber-band at ends
+      layout(false);
+    } else if(mode==='v'){
+      e.preventDefault();
+      s.img.style.transform=`translate(0px,${dy}px) scale(1)`;
+      const prog=Math.min(1,Math.abs(dy)/320);
+      viewer.style.background=`rgba(0,0,0,${1-prog*0.6})`;
+    }
+  },{passive:false});
+
+  vstage.addEventListener('touchend',e=>{
+    if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; }
+    if(holding){ endCompare(cur()); mode=null; return; }   // release compare, no nav/zoom
+    if(animating){ mode=null; return; }
+    const s=cur();
+    if(mode==='h'){
+      const passed=Math.abs(dragX)>W*0.16 || Math.abs(vX)>0.4;
+      if(passed && dragX<0 && vIndex<n()-1) commit(+1);
+      else if(passed && dragX>0 && vIndex>0) commit(-1);
+      else snapBack();
+    } else if(mode==='v' && s){
+      const dy=parseFloat((s.img.style.transform.match(/,([-0-9.]+)px\)/)||[])[1]||0);
+      if(Math.abs(dy)>100 || Math.abs(vY)>0.6){
+        s.img.style.transition='transform .2s ease'; s.img.style.transform=`translate(0px,${dy>0?window.innerHeight:-window.innerHeight}px) scale(1)`;
+        viewer.style.background='rgba(0,0,0,0)';
+        setTimeout(()=>{ closeViewer(); }, 190);
+      } else {
+        s.img.style.transition='transform .2s ease'; s.img.style.transform='translate(0px,0px) scale(1)';
+        viewer.style.background='#000';
+      }
+    } else if(mode==='pinch' && s){
+      if(s.scale<1.02) resetZoom(vIndex);
+    } else if(mode==='undecided' && s){    // tap
+      const now=Date.now();
+      if(now-lastTapT<300){
+        s.img.style.transition='transform .2s ease';
+        if(s.scale>1.01){ s.scale=1; s.tx=0; s.ty=0; } else { s.scale=2.6; s.tx=0; s.ty=0; }
+        imgTransform(s); lastTapT=0;
+      } else lastTapT=now;
+    }
+    mode=null;
+  });
+  vstage.addEventListener('touchcancel',()=>{
+    if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; }
+    if(holding) endCompare(cur());
+    mode=null;
+  });
+  window.addEventListener('resize',()=>{ if(viewer.classList.contains('show')) relayout(); });
+
+  // desktop fallback: click the black margin closes
+  vstage.addEventListener('click',e=>{ if(e.target===vstage && !('ontouchstart' in window)) closeViewer(); });
+
+  // kick off periodic count refresh immediately
+  refreshCounts();
+})();
+</script>
+</body>
+</html>
