@@ -1,0 +1,15 @@
+data/
+ts-state/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+.playwright-mcp/
+# host-only pieces (not part of the container image)
+gen_service.py
+film_daemon.py
+docker-compose.yml
+Dockerfile
+CLAUDE.md
+*.md

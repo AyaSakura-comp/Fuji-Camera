@@ -6,6 +6,10 @@ __pycache__/
 *.pyc
 .venv/
 
+# docker / tailscale secrets & state
+.env
+ts-state/
+
 # misc
 .playwright-mcp/
 *.log

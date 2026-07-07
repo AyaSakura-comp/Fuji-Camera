@@ -10,25 +10,39 @@ Served over Tailscale HTTPS (iOS Safari requires HTTPS for camera access):
 
 ## Architecture
 
+The web/pool server is **decoupled from the GPU** so it can run in a container / elsewhere while
+generation stays on the host. They talk over HTTP with **image bytes** (no shared filesystem).
+
 ```
 iPhone Safari (static SPA)
    │  POST /api/upload (JPEG)
    ▼
-server.py  ── FastAPI on 127.0.0.1:8090 ─────────────┐
-   │  photo saved to data/, status=pending           │ single worker thread,
-   │  worker picks one at a time (serial queue)       │ SERIAL (one GPU job at a time)
-   ▼                                                  │
-run_film(orig)  →  create_image.py 底片風 subprocess  │  (cold: reloads model each call)
-   │                                                  │
-   ▼                                                  ▼
-data/results/<id>.jpg (processed)          data/db.json (status: pending→processing→done/error)
+server.py ── FastAPI :8090 (web + pool + serial queue) ── NO GPU, NO torch
+   │  worker: run_film(orig_bytes)
+   │      POST bytes ─────────────►  gen_service.py  (HOST, :7863)  ── the GPU lives here
+   │      ◄──────── processed bytes     └─ shells out to create_image.py 底片風 (FLUX.2), serial
+   ▼
+data/  (originals/ results/ thumbs/ db.json ; status pending→processing→done/error)
 ```
 
-Frontend (`static/index.html`, one file) is served by the same FastAPI app at `/`.
-Tailscale `serve` proxies `:443 → 127.0.0.1:8090`.
+- `run_film(orig_bytes) -> bytes`: **prefers the host gen service** at `FUJI_GEN_URL`
+  (default `http://127.0.0.1:7863`; in a container set `http://host.docker.internal:7863`).
+  If the gen service is unreachable it **falls back to a local `create_image.py` subprocess**, so
+  running `server.py` directly on the host still works standalone (no gen service needed).
+- Frontend (`static/index.html`, one file) is served by the same FastAPI app at `/`.
+- **Two ways to deploy** (both keep the GPU on the host):
+  1. **Host-only** (current live): `fuji-camera.service` (server) + `fuji-gen.service` (gen) + host
+     `tailscale serve` → `https://aya.<tailnet>.ts.net/`.
+  2. **Docker** (`docker-compose.yml`): app container + Tailscale sidecar (new node `fuji-camera` →
+     `https://fuji-camera.<tailnet>.ts.net/`), talking to the host `fuji-gen.service`. See below.
 
 ## Files
 
+- `gen_service.py` — **host-side** GPU generation service (stdlib http, system python; it only shells
+  out to the FLUX venv). `POST /film` (raw image bytes) → processed PNG bytes; `GET /health`. Serial
+  (one GPU job at a time). Runs as `fuji-gen.service` on `:7863`.
+- `Dockerfile` / `docker-compose.yml` / `.dockerignore` / `ts-serve.json` / `.env.example` — the
+  containerised deploy (app + Tailscale sidecar). The image has **no torch/ROCm** — it's tiny.
 - `server.py` — FastAPI app + picture pool + serial worker. Endpoints:
   - `POST /api/upload` — multipart JPEG; normalises orientation, makes a thumb, enqueues, returns `{id}`.
   - `GET /api/photos` — list (newest first) + status counts.
@@ -123,6 +137,34 @@ sudo tailscale serve --bg --https=443 http://127.0.0.1:8090
 
 `data/` (originals/results/thumbs/db.json) is created on first run. The warm daemon
 (`fuji-film-daemon.service`) is optional and off by default — see "Warm daemon".
+
+## Deploy with Docker (app in a container, GPU on the host)
+
+The container runs only the web/pool server + a Tailscale sidecar; it reaches the host's
+`gen_service.py` over HTTP for the actual FLUX work. Because the handoff is **bytes over HTTP**
+(no shared filesystem), the container is portable — deploy it anywhere that can reach a gen endpoint.
+
+```bash
+# 1. HOST: run the GPU generation service (needs the create-image FLUX.2 skill + venv; see above)
+systemctl --user enable --now fuji-gen.service      # gen_service.py on :7863
+curl -s localhost:7863/health                        # {"ready": true}
+
+# 2. Tailscale auth key for the sidecar
+cp .env.example .env && $EDITOR .env                 # TS_AUTHKEY=tskey-auth-...
+
+# 3. bring up the container + sidecar
+docker compose up -d --build
+```
+
+- The sidecar registers a **new Tailscale node `fuji-camera`** → the app is served at
+  `https://fuji-camera.<your-tailnet>.ts.net/` (a fresh subdomain, distinct from the host's `aya.*`).
+- To make it **public on the internet**, set `AllowFunnel` to `true` in `ts-serve.json` (and enable
+  Funnel in the tailnet ACL). Otherwise it's tailnet-only.
+- The container reaches the host via `host.docker.internal` (`extra_hosts: host-gateway`);
+  `FUJI_GEN_URL=http://host.docker.internal:7863`. `gen_service.py` binds `0.0.0.0` for this.
+- `./data` is bind-mounted so the picture pool persists across container restarts.
+- **Don't run the host `fuji-camera.service` and the container at the same time** — they'd both drive
+  the single-GPU `fuji-gen.service` and compete. Pick one front-end.
 
 ## Running / ops
 

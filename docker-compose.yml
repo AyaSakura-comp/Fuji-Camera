@@ -1,0 +1,40 @@
+# Fuji Camera — containerised web/pool server + Tailscale sidecar.
+# GPU generation stays on the HOST (run gen_service.py there, e.g. as the
+# fuji-gen.service systemd unit on :7863). The app reaches it over HTTP.
+#
+#   cp .env.example .env   # put a Tailscale auth key in it
+#   docker compose up -d --build
+#
+# The tailscale sidecar registers a NEW node named "fuji-camera", so the app is
+# reachable at https://fuji-camera.<your-tailnet>.ts.net/  (a fresh subdomain).
+# Flip AllowFunnel in ts-serve.json to true to make it public on the internet.
+
+services:
+  app:
+    build: .
+    container_name: fuji-camera-app
+    restart: unless-stopped
+    environment:
+      - FUJI_GEN_URL=http://host.docker.internal:7863
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach the host's gen_service
+    volumes:
+      - ./data:/app/data                       # persist the picture pool
+    expose:
+      - "8090"
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: fuji-camera-ts
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      - TS_HOSTNAME=fuji-camera
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_SERVE_CONFIG=/config/serve.json
+    volumes:
+      - ./ts-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/serve.json:ro
+    network_mode: service:app                   # share app's netns → serve to 127.0.0.1:8090

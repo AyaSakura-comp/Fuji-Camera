@@ -7,10 +7,12 @@ runs `create_image.py "analog, AnalogRedmAF, F1.2 shallow depth of field, 35mm a
 RefControl analog flow) -> results saved. Status (pending/processing/done/error)
 is persisted in data/db.json and survives restarts.
 """
+import io
 import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
@@ -38,9 +40,14 @@ CREATE_IMG  = HOME / ".hermes/skills/create-image/scripts/create_image.py"
 FLUX_PY     = HOME / "models-work/flux2/.venv-rocm72/bin/python"
 FLUX_CWD    = HOME / "models-work/flux2"
 
-# Warm resident daemon (film_daemon.py). If it's up we use it (fast: no model
-# reload per image); otherwise fall back to the cold create_image.py subprocess.
-DAEMON_URL  = "http://127.0.0.1:7863"
+# Host-side generation service (gen_service.py). The worker sends original image
+# BYTES here over HTTP and gets processed BYTES back — no shared filesystem, so
+# this server can run in a container / elsewhere and just point at the endpoint.
+# In a container set FUJI_GEN_URL=http://host.docker.internal:7863.
+# On the host (no gen service running) it falls back to a local create_image.py
+# subprocess, so running server.py directly on the box still works standalone.
+GEN_URL   = os.environ.get("FUJI_GEN_URL", "http://127.0.0.1:7863").rstrip("/")
+GEN_STEPS = os.environ.get("FUJI_GEN_STEPS", "2")
 
 THUMB_MAX = 500     # px, longest edge for gallery thumbnails
 FULL_MAX  = 2200    # px, longest edge for the full-screen viewer image
@@ -81,48 +88,52 @@ work_q: "Queue[str]" = Queue()
 def enqueue(pid):
     work_q.put(pid)
 
-def _daemon_ready():
+# the style prompt (shared default with gen_service.py); overridable via env
+FILM_PROMPT = os.environ.get(
+    "FUJI_GEN_PROMPT",
+    "analog, AnalogRedmAF, F1.2 shallow depth of field, 35mm analog film photo, "
+    "soft contrast, fine film grain, subtle halation, cinematic bokeh")
+
+def _gen_ready():
     try:
-        with urllib.request.urlopen(DAEMON_URL + "/health", timeout=3) as r:
+        with urllib.request.urlopen(GEN_URL + "/health", timeout=3) as r:
             return json.loads(r.read()).get("ready") is True
     except Exception:
         return False
 
-def run_film(orig_path: Path) -> Path:
-    """Produce the film-styled PNG for orig_path; return its path.
-    Prefer the warm resident daemon; fall back to the cold subprocess."""
-    if _daemon_ready():
-        req = urllib.request.Request(
-            DAEMON_URL + "/film",
-            data=json.dumps({"image": str(orig_path)}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
+def run_film(orig_bytes: bytes) -> bytes:
+    """original image bytes -> processed film image bytes.
+    Prefer the host gen service over HTTP (no shared FS); on the host, fall back
+    to a local create_image.py subprocess so standalone runs still work."""
+    if _gen_ready():
+        req = urllib.request.Request(GEN_URL + "/film", data=orig_bytes,
+                                     headers={"Content-Type": "image/jpeg"})
         with urllib.request.urlopen(req, timeout=1800) as r:
-            res = json.loads(r.read())
-        if "final_path" not in res:
-            raise RuntimeError("daemon error: " + json.dumps(res)[:800])
-        final = Path(res["final_path"])
-        if not final.exists():
-            raise RuntimeError(f"daemon final_path missing: {final}")
-        return final
+            return r.read()
 
-    # fallback: cold create_image.py subprocess (reloads model each time)
-    env = dict(os.environ)
-    env["FLUX2_BIG_WMMA_LINEAR"] = "1"
-    cmd = [str(FLUX_PY), str(CREATE_IMG), "analog, AnalogRedmAF, F1.2 shallow depth of field, 35mm analog film photo, soft contrast, fine film grain, subtle halation, cinematic bokeh", "--refcontrol",
-           "--steps", "2", "--image", str(orig_path)]
-    proc = subprocess.run(cmd, cwd=str(FLUX_CWD), env=env,
-                          capture_output=True, text=True, timeout=1800)
-    if proc.returncode != 0:
-        raise RuntimeError(f"create_image exit {proc.returncode}: "
-                           + (proc.stderr or proc.stdout)[-800:])
-    m = re.search(r'"final_path":\s*"([^"]+)"', proc.stdout)
-    if not m:
-        raise RuntimeError("no final_path in output: " + proc.stdout[-800:])
-    final = Path(m.group(1))
-    if not final.exists():
-        raise RuntimeError(f"final_path missing on disk: {final}")
-    return final
+    # fallback: local cold create_image.py subprocess (host with the FLUX venv)
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+        tf.write(orig_bytes); tmp = tf.name
+    try:
+        env = dict(os.environ)
+        env["FLUX2_BIG_WMMA_LINEAR"] = "1"
+        cmd = [str(FLUX_PY), str(CREATE_IMG), FILM_PROMPT, "--refcontrol",
+               "--steps", GEN_STEPS, "--image", tmp]
+        proc = subprocess.run(cmd, cwd=str(FLUX_CWD), env=env,
+                              capture_output=True, text=True, timeout=1800)
+        if proc.returncode != 0:
+            raise RuntimeError(f"create_image exit {proc.returncode}: "
+                               + (proc.stderr or proc.stdout)[-800:])
+        m = re.search(r'"final_path":\s*"([^"]+)"', proc.stdout)
+        if not m:
+            raise RuntimeError("no final_path in output: " + proc.stdout[-800:])
+        final = Path(m.group(1))
+        if not final.exists():
+            raise RuntimeError(f"final_path missing on disk: {final}")
+        return final.read_bytes()
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
 
 def process_one(pid):
     with _db_lock:
@@ -134,15 +145,15 @@ def process_one(pid):
         p["started"] = time.time()
         save_db(db)
 
-    orig_path = ORIG / p["orig"]
     err = None
     try:
-        final = run_film(orig_path)
+        orig_bytes = (ORIG / p["orig"]).read_bytes()
+        result_bytes = run_film(orig_bytes)
 
         # store a viewer-sized JPEG + a thumbnail of the result
         res_name   = f"{pid}.jpg"
         thumb_name = f"{pid}_r.jpg"
-        im = ImageOps.exif_transpose(Image.open(final)).convert("RGB")
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(result_bytes))).convert("RGB")
         im.thumbnail((FULL_MAX, FULL_MAX), Image.LANCZOS)
         im.save(RESULT / res_name, "JPEG", quality=92)
         im.thumbnail((THUMB_MAX, THUMB_MAX), Image.LANCZOS)
@@ -155,7 +166,6 @@ def process_one(pid):
                 p["status"] = "done"
                 p["result"] = res_name
                 p["result_thumb"] = thumb_name
-                p["source_png"] = str(final)
                 p["finished"] = time.time()
                 p.pop("error", None)
                 save_db(db)
