@@ -107,11 +107,19 @@
       bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
       transform:none; flex-direction:column; align-items:center; gap:10px; width:auto;
     }
-    .zoomWrap {                              /* vertical slider on the left edge */
-      position:fixed; z-index:11; width:220px;
-      left:calc(env(safe-area-inset-left,0px) + 8px); top:50%;
-      transform:translate(-50%,-50%) rotate(-90deg); transform-origin:center;
-      margin-left:110px;                     /* recenter after the -90° rotation */
+    .zoomWrap {                              /* clean native vertical slider, left edge */
+      position:fixed; z-index:11; margin:0;
+      left:calc(env(safe-area-inset-left,0px) + 10px); top:50%;
+      transform:translateY(-50%);
+      flex-direction:column; align-items:center; gap:6px;
+      width:auto; height:auto; padding:12px 8px;
+    }
+    .zoomWrap > span:first-of-type { display:none; }   /* hide the "-" */
+    #zoomVal { order:-1; }                              /* value label on top */
+    #zoom {
+      -webkit-appearance:slider-vertical;              /* iOS Safari native vertical */
+      writing-mode:vertical-lr; direction:rtl;          /* newer engines: up = max */
+      width:26px; height:150px; flex:none;
     }
     .strip { margin-left:12px; }             /* recent captures stay top-left */
   }

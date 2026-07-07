@@ -422,7 +422,14 @@ def delete_photo(pid: str, request: Request):
             pass
     return {"ok": True}
 
-# static frontend (index.html at /) — mounted last so /api/* wins
+# serve the app HTML with no-cache so frontend edits show up immediately
+# (single-file app: fresh HTML = fresh inline CSS/JS)
+@app.get("/")
+def index():
+    return FileResponse(str(BASE / "static" / "index.html"), media_type="text/html",
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
+
+# static frontend (icons/manifest/etc.) — mounted last so /api/* and / win
 app.mount("/", StaticFiles(directory=str(BASE / "static"), html=True), name="static")
 
 if __name__ == "__main__":
