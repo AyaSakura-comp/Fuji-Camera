@@ -17,7 +17,9 @@ services:
     user: "1000:1000"                          # write ./data as the host user (uid 1000)
     environment:
       - FUJI_GEN_URL=http://host.docker.internal:7863
-      - FUJI_PASSCODE=${FUJI_PASSCODE:-}       # set (in .env) to require a passcode; empty = open
+      # passcode gate — each passcode is its own gallery. Comma-separated in .env.
+      - FUJI_PASSCODES=${FUJI_PASSCODES:-}
+      - FUJI_PASSCODE=${FUJI_PASSCODE:-}       # legacy single-passcode (still supported)
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach the host's gen_service
     volumes:

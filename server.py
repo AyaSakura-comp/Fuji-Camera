@@ -53,17 +53,37 @@ FLUX_CWD    = HOME / "models-work/flux2"
 GEN_URL   = os.environ.get("FUJI_GEN_URL", "http://127.0.0.1:7863").rstrip("/")
 GEN_STEPS = os.environ.get("FUJI_GEN_STEPS", "2")
 
-# Optional shared passcode gate (for public/Funnel exposure). When FUJI_PASSCODE is
-# set, every request needs a valid signed cookie; unauthenticated visitors get a
-# small login page. Unset = no gate (fine for tailnet-only use).
-PASSCODE    = os.environ.get("FUJI_PASSCODE", "")
+# Passcode gate (for public/Funnel exposure). One or more passcodes; EACH passcode
+# is its own gallery (photos are scoped to the passcode used to log in). Set via
+# FUJI_PASSCODES="a,b,c" (or the legacy single FUJI_PASSCODE). Unset = no gate.
+# The GPU queue is shared, so the "processing" counts are GLOBAL across groups.
+_pc_raw = (os.environ.get("FUJI_PASSCODES", "") + "," + os.environ.get("FUJI_PASSCODE", ""))
+PASSCODES   = [p.strip() for p in _pc_raw.split(",") if p.strip()]
+GATE_ON     = bool(PASSCODES)
 COOKIE_NAME = "fuji_auth"
 # open paths that never require auth (login POST + PWA icons/manifest)
-_OPEN_PATHS = {"/auth", "/manifest.webmanifest", "/favicon-32.png",
+_OPEN_PATHS = {"/auth", "/logout", "/manifest.webmanifest", "/favicon-32.png",
                "/apple-touch-icon.png", "/icon-192.png", "/icon-512.png"}
 
-def _auth_token() -> str:
-    return hmac.new(b"fuji-camera-gate", PASSCODE.encode(), hashlib.sha256).hexdigest()
+# group id per passcode; cookies are signed with a key derived from the actual
+# passcodes (secret — not in the public repo) so groups can't be forged.
+_SIGN_KEY   = hashlib.sha256(("fuji-sign:" + ",".join(sorted(PASSCODES))).encode()).digest()
+def _gid(passcode: str) -> str:
+    return hashlib.sha256(("fuji-grp:" + passcode).encode()).hexdigest()[:12]
+GROUPS      = {_gid(p): p for p in PASSCODES}
+DEFAULT_GID = _gid(PASSCODES[0]) if PASSCODES else ""   # legacy photos (no group) belong here
+
+def _make_cookie(passcode: str) -> str:
+    g = _gid(passcode)
+    sig = hmac.new(_SIGN_KEY, g.encode(), hashlib.sha256).hexdigest()[:16]
+    return g + "." + sig
+
+def _cookie_group(cookie: str):
+    if not cookie or "." not in cookie:
+        return None
+    g, sig = cookie.rsplit(".", 1)
+    good = hmac.new(_SIGN_KEY, g.encode(), hashlib.sha256).hexdigest()[:16]
+    return g if (g in GROUPS and hmac.compare_digest(sig, good)) else None
 
 _LOGIN_HTML = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -245,9 +265,12 @@ app = FastAPI(title="Fuji Camera")
 
 @app.middleware("http")
 async def _passcode_gate(request: Request, call_next):
-    if not PASSCODE or request.url.path in _OPEN_PATHS:
+    if not GATE_ON or request.url.path in _OPEN_PATHS:
+        request.state.group = DEFAULT_GID
         return await call_next(request)
-    if request.cookies.get(COOKIE_NAME) == _auth_token():
+    gid = _cookie_group(request.cookies.get(COOKIE_NAME, ""))
+    if gid:
+        request.state.group = gid
         return await call_next(request)
     if request.url.path.startswith("/api"):
         return JSONResponse({"error": "auth required"}, status_code=401)
@@ -255,20 +278,29 @@ async def _passcode_gate(request: Request, call_next):
 
 @app.post("/auth")
 async def auth(passcode: str = Form("")):
-    if PASSCODE and hmac.compare_digest(passcode, PASSCODE):
+    if any(hmac.compare_digest(passcode, p) for p in PASSCODES):
         resp = RedirectResponse("/", status_code=303)
-        resp.set_cookie(COOKIE_NAME, _auth_token(), max_age=30 * 24 * 3600,
+        resp.set_cookie(COOKIE_NAME, _make_cookie(passcode), max_age=30 * 24 * 3600,
                         httponly=True, samesite="lax", secure=True)
         return resp
     return HTMLResponse(_LOGIN_HTML.replace("%ERR%", "密碼錯誤"), status_code=401)
 
+@app.post("/logout")
+async def logout():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie(COOKIE_NAME)
+    return resp
+
 @app.on_event("startup")
 def _startup():
-    # requeue anything left pending / processing from a previous run
+    # requeue anything left pending / processing from a previous run;
+    # backfill a group on legacy photos (permanently assign them to DEFAULT_GID)
     with _db_lock:
         db = load_db()
         requeue = []
         for p in db["photos"]:
+            if "group" not in p:
+                p["group"] = DEFAULT_GID
             if p["status"] in ("pending", "processing"):
                 p["status"] = "pending"
                 requeue.append(p["id"])
@@ -279,7 +311,7 @@ def _startup():
     t.start()
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(request: Request, file: UploadFile = File(...)):
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty upload")
@@ -302,6 +334,7 @@ async def upload(file: UploadFile = File(...)):
         "created": time.time(),
         "orig": orig_name,
         "orig_thumb": thumb_name,
+        "group": getattr(request.state, "group", DEFAULT_GID),   # per-passcode gallery
     }
     with _db_lock:
         db = load_db()
@@ -311,15 +344,20 @@ async def upload(file: UploadFile = File(...)):
     return {"id": pid, "status": "pending"}
 
 @app.get("/api/photos")
-def list_photos():
+def list_photos(request: Request):
+    grp = getattr(request.state, "group", DEFAULT_GID)
     with _db_lock:
         db = load_db()
         photos = list(db["photos"])
     photos.sort(key=lambda p: p.get("created", 0), reverse=True)
+    # counts are GLOBAL (shared GPU queue) so "processing N" reflects everyone;
+    # the photo list is scoped to the caller's passcode group (their own gallery).
     counts = {"pending": 0, "processing": 0, "done": 0, "error": 0}
     out = []
     for p in photos:
         counts[p["status"]] = counts.get(p["status"], 0) + 1
+        if p.get("group", DEFAULT_GID) != grp:
+            continue
         out.append({
             "id": p["id"],
             "status": p["status"],
@@ -333,40 +371,41 @@ def _file_or_404(path: Path, media="image/jpeg"):
         raise HTTPException(404, "not found")
     return FileResponse(str(path), media_type=media)
 
-@app.get("/api/file/{pid}/thumb")
-def get_thumb(pid: str):
+def _find_owned(pid: str, request: Request):
+    """find the photo, but only if it belongs to the caller's passcode group."""
+    grp = getattr(request.state, "group", DEFAULT_GID)
     with _db_lock:
         p = find(load_db(), pid)
-    if not p:
+    if not p or p.get("group", DEFAULT_GID) != grp:
         raise HTTPException(404, "no such photo")
+    return p
+
+@app.get("/api/file/{pid}/thumb")
+def get_thumb(pid: str, request: Request):
+    p = _find_owned(pid, request)
     if p["status"] == "done" and p.get("result_thumb"):
         return _file_or_404(THUMB / p["result_thumb"])
     return _file_or_404(THUMB / p.get("orig_thumb", f"{pid}.jpg"))
 
 @app.get("/api/file/{pid}/full")
-def get_full(pid: str):
-    with _db_lock:
-        p = find(load_db(), pid)
-    if not p:
-        raise HTTPException(404, "no such photo")
+def get_full(pid: str, request: Request):
+    p = _find_owned(pid, request)
     if p["status"] == "done" and p.get("result"):
         return _file_or_404(RESULT / p["result"])
     return _file_or_404(ORIG / p.get("orig", f"{pid}.jpg"))
 
 @app.get("/api/file/{pid}/orig")
-def get_orig(pid: str):
-    with _db_lock:
-        p = find(load_db(), pid)
-    if not p:
-        raise HTTPException(404, "no such photo")
+def get_orig(pid: str, request: Request):
+    p = _find_owned(pid, request)
     return _file_or_404(ORIG / p.get("orig", f"{pid}.jpg"))
 
 @app.delete("/api/photo/{pid}")
-def delete_photo(pid: str):
+def delete_photo(pid: str, request: Request):
+    grp = getattr(request.state, "group", DEFAULT_GID)
     with _db_lock:
         db = load_db()
         p = find(db, pid)
-        if not p:
+        if not p or p.get("group", DEFAULT_GID) != grp:
             raise HTTPException(404, "no such photo")
         db["photos"] = [x for x in db["photos"] if x["id"] != pid]
         save_db(db)

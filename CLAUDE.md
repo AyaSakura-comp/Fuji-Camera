@@ -160,9 +160,16 @@ docker compose up -d --build
   `https://fuji-camera.<your-tailnet>.ts.net/` (a fresh subdomain, distinct from the host's `aya.*`).
 - To make it **public on the internet**, set `AllowFunnel` to `true` in `ts-serve.json` (and enable
   Funnel in the tailnet ACL). Otherwise it's tailnet-only. **When public, set a passcode** (below).
-- **Passcode gate**: set `FUJI_PASSCODE` (in `.env`) → every request needs a valid signed cookie; a
-  small login page collects the passcode and sets a 30-day cookie (icons/manifest stay open so the
-  PWA works). Unset = no gate (fine for tailnet-only). Implemented as a middleware in `server.py`.
+- **Passcode gate + per-passcode galleries**: set `FUJI_PASSCODES="8345,2233,..."` (in `.env`;
+  legacy `FUJI_PASSCODE` still merged). Every request needs a valid signed cookie; a login page
+  collects the passcode and sets a 30-day cookie (icons/manifest stay open for the PWA). **Each
+  passcode is its own gallery** — uploads are tagged with the caller's group (`_gid(passcode)`);
+  `/api/photos` and `/api/file` + delete are scoped to that group (cross-group access → 404). BUT
+  the `counts` in `/api/photos` are **global** across all groups (shared GPU queue), so the
+  "processing N" pill/badge reflects everyone. Legacy photos (no group) are backfilled to
+  `DEFAULT_GID` (= first passcode's group) on startup. Cookies are signed with a key derived from the
+  actual passcodes (secret — not in the repo), so groups can't be forged. `POST /logout` clears the
+  cookie (there's a 登出 tab). Unset `FUJI_PASSCODES` = no gate (fine for tailnet-only).
 - The container reaches the host via `host.docker.internal` (`extra_hosts: host-gateway`);
   `FUJI_GEN_URL=http://host.docker.internal:7863`. `gen_service.py` binds `0.0.0.0` for this.
 - `./data` is bind-mounted so the picture pool persists across container restarts.
@@ -197,16 +204,23 @@ journalctl --user -u fuji-gen -n 40 --no-pager        # gen service logs
 
 - **Camera**: lens picker `.5×/1×/2×` classified from `enumerateDevices` labels (matches both Chinese
   `後置超廣角/望遠` and English `ultra/tele`; hides iOS virtual composite cams), zoom slider via track
-  `zoom` capability, burst-hold shutter, background upload (non-blocking so you can shoot rapidly).
+  `zoom` capability + **two-finger pinch** on the preview (shared `applyZoom()`), burst-hold shutter,
+  background upload (non-blocking). Camera stream **stops on the gallery tab / reopens on return**.
+  - **Capture follows orientation**: grabs the visible `object-fit:cover` region, so portrait phone →
+    portrait photo, landscape → landscape (also WYSIWYG with the preview). Front camera mirrored.
+  - **Landscape layout** (`@media (orientation:landscape)`): tab nav → vertical bar far-right, shutter
+    cluster just left of it, zoom → vertical slider on the left edge, lens picker bottom-centre.
 - **Gallery**: `#gallery` is a full-screen scroll container (`position:absolute; inset:0; overflow-y:auto`).
-  3-col thumbnail grid, spinner overlay on processing/pending cells, polls `/api/photos` every 3s.
+  3-col thumbnail grid, spinner overlay on processing/pending cells, polls `/api/photos` every 3s. A
+  **+ button** uploads any device photo(s) into the pool (`/api/upload`, processed the same way).
 - **Viewer**: windowed filmstrip carousel — one `.vslide` per photo in `[vIndex-1 .. vIndex+1]`, each at
   `left=i*W`, track `translateX(-vIndex*W + dragX)`, so prev/next are preloaded and glued during the
   drag; velocity/distance snap. Pinch-zoom, double-tap, swipe-down-to-dismiss.
   - **Press-and-hold (320ms) = Lightroom before/after**: shows `/orig` while held, back to `/full` on
     release (orig preloaded per done slide).
-  - **Download always fetches the processed result** (`/full?dl=<ts>`, `cache:'no-store'`, blob) — never
-    the original, even while 看原圖 / holding.
+  - **Download/save = what you're viewing**: the original when 看原圖 is active (`/orig`, file
+    `fuji_<id>_orig.jpg`), else the processed result (`/full`). Cache-busted (`?dl=<ts>`,
+    `cache:'no-store'`, blob). On iPhone uses the Web Share API (`navigator.share`) → Save to Photos.
 
 ## Gotchas (real bugs hit here)
 
