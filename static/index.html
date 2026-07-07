@@ -83,6 +83,19 @@
   .shutter:active { background:#ddd; }
   .shutter.burst { background:#ff3b30; }
 
+  /* landscape: move the shutter cluster to the right edge (like the iPhone camera) */
+  @media (orientation: landscape) {
+    .cam-bottom {
+      left:auto; bottom:auto; top:50%;
+      right:calc(env(safe-area-inset-right,0px) + 14px);
+      transform:translateY(-50%);
+      flex-direction:column; align-items:flex-end; gap:10px; width:auto;
+    }
+    .cam-controls { flex-direction:column; gap:20px; }
+    .lenses { max-width:56vw; }
+    .zoomWrap { width:210px; max-width:48vw; }
+  }
+
   /* recent-capture strip + processing counter */
   .cam-top {
     position:absolute; top:calc(env(safe-area-inset-top,0px) + 10px); left:0; right:0;
