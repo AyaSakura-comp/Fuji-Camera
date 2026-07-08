@@ -236,9 +236,9 @@
 
 <!-- ================= CAMERA ================= -->
 <div class="view active" id="camView">
-  <div id="start">
+  <div id="start" class="hidden">
     <h1>📷 Fuji 相機</h1>
-    <p>連續快拍 → 自動上傳 → 伺服器一張一張套上底片風。<br><br>（iPhone 需用 <b>https</b> 開啟，Safari 才允許相機）</p>
+    <p>需要相機權限才能拍照。<br><br>（iPhone 需用 <b>https</b> 開啟，Safari 才允許相機）</p>
     <button id="startBtn">開啟相機</button>
   </div>
 
@@ -449,7 +449,8 @@
     vc.width={ideal:1920}; vc.height={ideal:1080};
     try{ stream=await navigator.mediaDevices.getUserMedia({audio:false,video:vc}); }
     catch(e){ try{ stream=await navigator.mediaDevices.getUserMedia({audio:false,video:true}); }
-      catch(e2){ showMsg('無法開啟相機：'+(e2.name||e2.message)); return; } }
+      catch(e2){ startEl.classList.remove('hidden');   // fallback: show the tap-to-open page
+        showMsg('無法開啟相機：'+(e2.name||e2.message)); return; } }
     video.srcObject=stream; curTrack=stream.getVideoTracks()[0];
     const s=curTrack.getSettings?curTrack.getSettings():{}; if(s.deviceId)curDeviceId=s.deviceId;
     video.classList.toggle('mirror',facing==='user');
@@ -808,6 +809,10 @@
 
   // kick off periodic count refresh immediately
   refreshCounts();
+
+  // auto-open the camera on load (iOS shows its own permission prompt);
+  // if the browser blocks it, startCamera() reveals the tap-to-open fallback.
+  startCamera();
 })();
 </script>
 </body>
