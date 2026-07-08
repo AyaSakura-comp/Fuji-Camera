@@ -619,10 +619,12 @@
     vtrack.style.transition = anim ? 'transform 260ms cubic-bezier(.22,.61,.36,1)' : 'none';
     vtrack.style.transform = `translateX(${-vIndex*W + dragX}px)`;
   }
-  function relayout(){   // on resize / open
-    W=vstage.clientWidth;
+  function relayout(){   // on resize / rotate / open
+    W=vstage.clientWidth; dragX=0;
     Object.keys(slides).map(Number).forEach(i=>{ const s=slides[i];
-      s.el.style.width=W+'px'; s.el.style.left=(i*W)+'px'; });
+      s.el.style.width=W+'px'; s.el.style.left=(i*W)+'px';
+      s.scale=1; s.tx=0; s.ty=0; s.img.style.transition='none'; imgTransform(s);  // clear stale zoom/pan
+    });
     layout(false);
   }
   function updateInfo(){
@@ -810,7 +812,17 @@
     if(holding) endCompare(cur());
     mode=null;
   });
-  window.addEventListener('resize',()=>{ if(viewer.classList.contains('show')) relayout(); });
+  // iOS Safari reports stale dimensions the instant it fires resize on rotation,
+  // so relayout now AND again after it settles; also cover orientationchange.
+  let _rlTimer;
+  function onViewportChange(){
+    if(!viewer.classList.contains('show')) return;
+    relayout();
+    clearTimeout(_rlTimer); _rlTimer=setTimeout(relayout, 350);
+  }
+  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('orientationchange', onViewportChange);
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', onViewportChange);
 
   // desktop fallback: click the black margin closes
   vstage.addEventListener('click',e=>{ if(e.target===vstage && !('ontouchstart' in window)) closeViewer(); });
