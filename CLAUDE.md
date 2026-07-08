@@ -61,12 +61,12 @@ The worker shells out to the shared create-image skill — do **not** reimplemen
 FLUX2_BIG_WMMA_LINEAR=1 \
   ~/models-work/flux2/.venv-rocm72/bin/python \
   ~/.hermes/skills/create-image/scripts/create_image.py \
-  "底片風" --refcontrol --steps 2 --image <orig>    # cwd: ~/models-work/flux2
+  "analog, AnalogRedmAF, F1.2 shallow depth of field, 35mm analog film photo, soft contrast, fine film grain, subtle halation, cinematic bokeh" \
+  --refcontrol --steps 2 --image <orig>    # cwd: ~/models-work/flux2
 ```
 
-- `底片風` is a film keyword → the script auto-runs the RefControl analog flow. The prompt the model
-  actually sees is `refcontrol, analog, AnalogRedmAF, 底片風` (assembled in `create_image.py`, not here).
-  LoRAs: `refcontrol_klein9b_depth` (structure) + `analog_redmond` (film).
+- The app uses the measured F1.2/analog prompt above (also available as `FUJI_GEN_PROMPT`) rather than a bare `底片風` keyword, so the output matches the local `/create-image` experiments.
+  The RefControl flow prepends `refcontrol, analog, AnalogRedmAF` and loads the LoRAs: `refcontrol_klein9b_depth` (structure) + `analog_redmond` (film).
 - The worker parses `"final_path"` from the script's stdout JSON, then makes a viewer JPEG + thumb.
 - **`--steps 2`** is a deliberate speed choice (see Perf).
 
@@ -95,7 +95,7 @@ the denoise dominates. Keeping it resident holds ~33GB and forces `qwen-lcpp` of
   - script: `~/.hermes/skills/create-image/scripts/create_image.py`
   - FLUX venv (torch+diffusers, ROCm): `~/models-work/flux2/.venv-rocm72`
   - LoRAs present under `~/models-work/flux2/loras/` (`refcontrol_klein9b_depth`, `analog_redmond`).
-  Sanity check: `~/models-work/flux2/.venv-rocm72/bin/python ~/.hermes/skills/create-image/scripts/create_image.py "底片風" --refcontrol --steps 2 --image some.jpg`
+  Sanity check: `~/models-work/flux2/.venv-rocm72/bin/python ~/.hermes/skills/create-image/scripts/create_image.py "analog, AnalogRedmAF, F1.2 shallow depth of field, 35mm analog film photo, soft contrast, fine film grain, subtle halation, cinematic bokeh" --refcontrol --steps 2 --image some.jpg`
 - **System python3** (the server itself is light) with: `fastapi uvicorn pillow python-multipart`
   (`pip3 install --user fastapi uvicorn pillow python-multipart` if missing).
 - **Tailscale** up and logged in (for HTTPS; iOS camera needs it).
@@ -209,9 +209,12 @@ journalctl --user -u fuji-gen -n 40 --no-pager        # gen service logs
   - **Capture follows orientation**: grabs the visible `object-fit:cover` region, so portrait phone →
     portrait photo, landscape → landscape (also WYSIWYG with the preview). Front camera mirrored.
   - **Landscape layout** (`@media (orientation:landscape)`): tab nav → vertical bar far-right, shutter
-    cluster just left of it, zoom → vertical slider on the left edge, lens picker bottom-centre.
+    cluster just left of it, zoom → vertical slider on the left edge, lens picker bottom-centre. The shared
+    `--land-tabbar-w` CSS variable includes `env(safe-area-inset-right)` so controls and gallery content
+    avoid the iPhone 14 Pro landscape right-side rail.
 - **Gallery**: `#gallery` is a full-screen scroll container (`position:absolute; inset:0; overflow-y:auto`).
-  3-col thumbnail grid, spinner overlay on processing/pending cells, polls `/api/photos` every 3s. A
+  In landscape, `#gallery` and `.g-title` reserve `--land-tabbar-w` on the right so the thumbnail grid/header
+  are not hidden under the vertical 拍照/相簿/登出 tab bar. 3-col thumbnail grid, spinner overlay on processing/pending cells, polls `/api/photos` every 3s. A
   **+ button** uploads any device photo(s) into the pool (`/api/upload`, processed the same way).
 - **Viewer**: windowed filmstrip carousel — one `.vslide` per photo in `[vIndex-1 .. vIndex+1]`, each at
   `left=i*W`, track `translateX(-vIndex*W + dragX)`, so prev/next are preloaded and glued during the
@@ -225,7 +228,9 @@ journalctl --user -u fuji-gen -n 40 --no-pager        # gen service logs
 ## Gotchas (real bugs hit here)
 
 - **CSS `calc()` needs spaces around `+`/`-`**: `calc(env(...)+18px)` is invalid and the whole value is
-  discarded → e.g. the bottom action bar collapsed to the top. Always `calc(env(...) + 18px)`.
+  discarded → e.g. the bottom action bar collapsed to the top. Always `calc(env(...) + 18px)`. Prefer a
+  single variable such as `--land-tabbar-w` for repeated safe-area math so camera controls and gallery rails
+  stay aligned in iPhone landscape.
 - **`/full` returns the ORIGINAL while a photo is still processing** (result doesn't exist yet). Anything
   that must be the processed image needs cache-busting, or it can serve a stale cached original.
 - **iOS long-press "Save Image" callout** conflicts with hold-to-compare → disabled via

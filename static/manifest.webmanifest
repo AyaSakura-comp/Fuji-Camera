@@ -4,7 +4,7 @@
   "description": "Shoot on iPhone, auto film-style (底片風) via local FLUX.2.",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#000000",
   "icons": [

@@ -90,26 +90,27 @@
        bottom     = lens picker (centred, clear of the right bars)
        top-left   = processing pill + recent strip                                */
   @media (orientation: landscape) {
+    :root { --land-tabbar-w: calc(74px + env(safe-area-inset-right, 0px)); }
     .tabbar {
-      top:0; bottom:0; right:0; left:auto; height:auto; width:74px;
-      padding:0 env(safe-area-inset-right,0px) 0 0;
+      top:0; bottom:0; right:0; left:auto; height:auto; width:var(--land-tabbar-w);
+      padding:0 env(safe-area-inset-right, 0px) 0 0;
       flex-direction:column; justify-content:center; gap:30px;
       border-top:none; border-left:0.5px solid rgba(255,255,255,0.15);
     }
     .cam-controls {
       position:fixed; z-index:11;
-      right:calc(74px + env(safe-area-inset-right,0px) + 18px);
+      right:calc(var(--land-tabbar-w) + 18px);
       top:50%; transform:translateY(-50%);
       flex-direction:column; gap:22px;
     }
     .cam-bottom {
-      left:0; right:74px; top:auto;
-      bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
+      left:0; right:var(--land-tabbar-w); top:auto;
+      bottom:calc(env(safe-area-inset-bottom, 0px) + 14px);
       transform:none; flex-direction:column; align-items:center; gap:10px; width:auto;
     }
     .zoomWrap {                              /* clean native vertical slider, left edge */
       position:fixed; z-index:11; margin:0;
-      left:calc(env(safe-area-inset-left,0px) + 10px); top:50%;
+      left:calc(env(safe-area-inset-left, 0px) + 10px); top:50%;
       transform:translateY(-50%);
       flex-direction:column; align-items:center; gap:6px;
       width:auto; height:auto; padding:12px 8px;
@@ -122,6 +123,14 @@
       width:26px; height:150px; flex:none;
     }
     .strip { margin-left:12px; }             /* recent captures stay top-left */
+
+    /* iPhone landscape gallery: reserve the right-side tab rail (incl. safe area)
+       so thumbnails/header are not hidden under 拍照/相簿/登出. */
+    #gallery {
+      right:var(--land-tabbar-w);
+      padding:calc(env(safe-area-inset-top, 0px) + 52px) 3px calc(env(safe-area-inset-bottom, 0px) + 10px);
+    }
+    .g-title { right:var(--land-tabbar-w); }
   }
 
   /* recent-capture strip + processing counter */
