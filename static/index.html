@@ -47,8 +47,15 @@
   .badge.show { display:block; }
 
   /* ---------- camera view ---------- */
-  #video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
-  #video.mirror { transform:scaleX(-1); }
+  /* preview is letterboxed to a FIXED aspect (2:3 portrait / 3:2 landscape) so the
+     captured photo is always that ratio and matches what's framed (capture() crops
+     to the video element's displayed box). */
+  #video { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:min(100vw, 66.67vh); aspect-ratio:2 / 3; object-fit:cover; background:#000; }
+  #video.mirror { transform:translate(-50%,-50%) scaleX(-1); }
+  @media (orientation: landscape) {
+    #video { width:min(150vh, 100vw); aspect-ratio:3 / 2; }
+  }
 
   .cam-bottom {
     position:absolute; left:0; right:0;
