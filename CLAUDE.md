@@ -25,6 +25,36 @@ server.py ── FastAPI :8090 (web + pool + serial queue) ── NO GPU, NO tor
 data/  (originals/ results/ thumbs/ db.json ; status pending→processing→done/error)
 ```
 
+End-to-end flow (GitHub renders this Mermaid):
+
+```mermaid
+flowchart TD
+    phone["📱 iPhone Safari<br/>拍照 2:3 / 3:2 或 ＋上傳照片"]
+    gate["🔐 Tailscale Funnel 公開 HTTPS<br/>密碼閘門 8345 / 2233 / 2345"]
+    gallery["🖼️ 相簿瀏覽 / 長按看原圖 / 儲存到相簿"]
+
+    subgraph container["🐳 Docker Container（無 GPU）"]
+        upload["POST /api/upload<br/>存原圖 → status=pending<br/>依密碼分相簿群組"]
+        worker["Worker 串行 一次一張<br/>run_film(bytes)"]
+        save["存成品 + 縮圖<br/>status=done"]
+    end
+
+    subgraph host["🖥️ Host（GPU）"]
+        gen["gen_service.py :7863"]
+        flux["create_image.py「底片風」<br/>FLUX.2 RefControl ~110s"]
+    end
+
+    phone -->|HTTPS| gate
+    gate --> upload
+    upload -->|排入佇列| worker
+    worker -->|"HTTP 傳 bytes<br/>host.docker.internal"| gen
+    gen --> flux
+    flux -.->|成品 bytes| gen
+    gen -.->|回傳| save
+    save -->|"poll /api/photos<br/>處理中數為全域"| gallery
+    gallery -.->|顯示| phone
+```
+
 - `run_film(orig_bytes) -> bytes`: **prefers the host gen service** at `FUJI_GEN_URL`
   (default `http://127.0.0.1:7863`; in a container set `http://host.docker.internal:7863`).
   If the gen service is unreachable it **falls back to a local `create_image.py` subprocess**, so
