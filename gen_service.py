@@ -40,13 +40,21 @@ PROMPT = os.environ.get(
     "soft contrast, fine film grain, subtle halation, cinematic bokeh")
 
 _gpu_lock = threading.Lock()   # one FLUX job at a time (single GPU)
+_AP_RE = re.compile(r"^\d+(\.\d+)?$")   # aperture must be a plain number
 
 
 def log(*a):
     print("[gen-service]", *a, flush=True)
 
 
-def run_film_bytes(orig: bytes) -> bytes:
+def prompt_for(aperture: str) -> str:
+    """swap the F-number in the base prompt for the requested aperture (F2.8 etc.)."""
+    if not aperture or not _AP_RE.match(aperture):
+        return PROMPT
+    return re.sub(r"F[0-9.]+", "F" + aperture, PROMPT, count=1)
+
+
+def run_film_bytes(orig: bytes, aperture: str = "1.2") -> bytes:
     """original image bytes -> processed film PNG bytes (blocks; serialized)."""
     with _gpu_lock:
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
@@ -55,7 +63,7 @@ def run_film_bytes(orig: bytes) -> bytes:
         try:
             env = dict(os.environ)
             env["FLUX2_BIG_WMMA_LINEAR"] = "1"
-            cmd = [str(FLUX_PY), str(CREATE_IMG), PROMPT, "--refcontrol",
+            cmd = [str(FLUX_PY), str(CREATE_IMG), prompt_for(aperture), "--refcontrol",
                    "--steps", STEPS, "--image", tmp]
             proc = subprocess.run(cmd, cwd=str(FLUX_CWD), env=env,
                                   capture_output=True, text=True, timeout=1800)
@@ -100,7 +108,8 @@ class Handler(BaseHTTPRequestHandler):
             if n <= 0:
                 return self._send(400, {"error": "empty body"})
             data = self.rfile.read(n)
-            out = run_film_bytes(data)
+            aperture = self.headers.get("X-Aperture", "1.2")
+            out = run_film_bytes(data, aperture)
             self._send(200, out, ctype="image/png")
         except Exception as e:
             import traceback

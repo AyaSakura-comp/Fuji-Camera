@@ -152,6 +152,12 @@ FILM_PROMPT = os.environ.get(
     "FUJI_GEN_PROMPT",
     "analog, AnalogRedmAF, F1.2 shallow depth of field, 35mm analog film photo, "
     "soft contrast, fine film grain, subtle halation, cinematic bokeh")
+_AP_RE = re.compile(r"^\d+(\.\d+)?$")
+
+def _prompt_for(aperture):
+    if not aperture or not _AP_RE.match(str(aperture)):
+        return FILM_PROMPT
+    return re.sub(r"F[0-9.]+", "F" + str(aperture), FILM_PROMPT, count=1)
 
 def _gen_ready():
     try:
@@ -160,13 +166,14 @@ def _gen_ready():
     except Exception:
         return False
 
-def run_film(orig_bytes: bytes) -> bytes:
+def run_film(orig_bytes: bytes, aperture: str = "1.2") -> bytes:
     """original image bytes -> processed film image bytes.
     Prefer the host gen service over HTTP (no shared FS); on the host, fall back
     to a local create_image.py subprocess so standalone runs still work."""
     if _gen_ready():
         req = urllib.request.Request(GEN_URL + "/film", data=orig_bytes,
-                                     headers={"Content-Type": "image/jpeg"})
+                                     headers={"Content-Type": "image/jpeg",
+                                              "X-Aperture": str(aperture)})
         with urllib.request.urlopen(req, timeout=1800) as r:
             return r.read()
 
@@ -176,7 +183,7 @@ def run_film(orig_bytes: bytes) -> bytes:
     try:
         env = dict(os.environ)
         env["FLUX2_BIG_WMMA_LINEAR"] = "1"
-        cmd = [str(FLUX_PY), str(CREATE_IMG), FILM_PROMPT, "--refcontrol",
+        cmd = [str(FLUX_PY), str(CREATE_IMG), _prompt_for(aperture), "--refcontrol",
                "--steps", GEN_STEPS, "--image", tmp]
         proc = subprocess.run(cmd, cwd=str(FLUX_CWD), env=env,
                               capture_output=True, text=True, timeout=1800)
@@ -208,7 +215,7 @@ def process_one(pid):
     err = None
     try:
         orig_bytes = (ORIG / p["orig"]).read_bytes()
-        result_bytes = run_film(orig_bytes)
+        result_bytes = run_film(orig_bytes, p.get("aperture", "1.2"))
 
         # deleted while it was processing? discard the result, write nothing.
         with _db_lock:
@@ -311,10 +318,11 @@ def _startup():
     t.start()
 
 @app.post("/api/upload")
-async def upload(request: Request, file: UploadFile = File(...)):
+async def upload(request: Request, file: UploadFile = File(...), aperture: str = Form("1.2")):
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty upload")
+    aperture = aperture if _AP_RE.match(aperture or "") else "1.2"   # validate
     pid = uuid.uuid4().hex[:12]
     orig_name  = f"{pid}.jpg"
     thumb_name = f"{pid}.jpg"
@@ -335,6 +343,7 @@ async def upload(request: Request, file: UploadFile = File(...)):
         "orig": orig_name,
         "orig_thumb": thumb_name,
         "group": getattr(request.state, "group", DEFAULT_GID),   # per-passcode gallery
+        "aperture": aperture,
     }
     with _db_lock:
         db = load_db()
@@ -363,6 +372,7 @@ def list_photos(request: Request):
             "status": p["status"],
             "created": p.get("created"),
             "error": p.get("error"),
+            "aperture": p.get("aperture", "1.2"),
         })
     return {"photos": out, "counts": counts}
 

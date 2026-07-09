@@ -62,6 +62,19 @@
     bottom:calc(env(safe-area-inset-bottom,0px) + 70px);
     z-index:10; display:flex; flex-direction:column; align-items:center; gap:14px;
   }
+  /* aperture dial: a horizontal swipe wheel; the centred f-stop is selected */
+  .aperture { position:relative; width:min(84vw,340px); height:40px; overflow:hidden;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent);
+            mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent); }
+  .ap-track { display:flex; height:100%; align-items:center; overflow-x:auto; overflow-y:hidden;
+    scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  .ap-track::-webkit-scrollbar { display:none; }
+  .ap-item { flex:0 0 auto; width:52px; text-align:center; scroll-snap-align:center;
+    color:#8a8a8e; font-size:13px; font-weight:600; cursor:pointer; transition:color .12s,transform .12s; }
+  .ap-item.sel { color:#ffd60a; transform:scale(1.18); }
+  .ap-caret { position:absolute; top:0; left:50%; transform:translateX(-50%);
+    width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent;
+    border-top:6px solid #ffd60a; pointer-events:none; }
   .lenses { display:flex; gap:8px; padding:6px; background:rgba(0,0,0,0.4);
     backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border-radius:26px;
     max-width:92vw; overflow-x:auto; }
@@ -262,6 +275,10 @@
   </div>
 
   <div class="cam-bottom hidden" id="camBottom">
+    <div class="aperture" id="aperture">
+      <div class="ap-track" id="apTrack"></div>
+      <div class="ap-caret"></div>
+    </div>
     <div class="lenses" id="lenses"></div>
     <div class="zoomWrap" id="zoomWrap">
       <span>-</span><input type="range" id="zoom" min="1" max="5" step="0.1" value="1">
@@ -492,12 +509,39 @@
   }
   async function uploadBlob(blob){
     const localUrl=URL.createObjectURL(blob); addStrip(localUrl);
-    const fd=new FormData(); fd.append('file',blob,'shot.jpg');
+    const fd=new FormData(); fd.append('file',blob,'shot.jpg'); fd.append('aperture',currentAperture);
     try{ await fetch('/api/upload',{method:'POST',body:fd}); }
     catch(e){ showMsg('上傳失敗：'+e.message); setTimeout(hideMsg,2500); }
     refreshCounts();
   }
   shutter.onclick=capture;
+
+  // ---------- aperture dial (swipe wheel; centred f-stop = selected) ----------
+  const APERTURES=['1.2','1.4','1.8','2','2.8','4','5.6','8','11','16'];
+  let currentAperture='1.2';
+  const apTrack=$('apTrack'), apWrap=$('aperture');
+  function apSpacer(){ const s=document.createElement('div'); s.style.cssText='flex:0 0 auto;width:calc(50% - 26px)'; return s; }
+  function centerApItem(el,smooth){
+    const target=el.offsetLeft-(apTrack.clientWidth/2-el.offsetWidth/2);
+    apTrack.scrollTo({left:target,behavior:smooth?'smooth':'auto'});
+  }
+  function updateApSel(){
+    const cx=apWrap.getBoundingClientRect().left+apWrap.clientWidth/2;
+    let best=null,bd=1e9;
+    apTrack.querySelectorAll('.ap-item').forEach(el=>{
+      const r=el.getBoundingClientRect(), d=Math.abs((r.left+r.right)/2-cx);
+      el.classList.remove('sel'); if(d<bd){bd=d;best=el;}
+    });
+    if(best){ best.classList.add('sel'); currentAperture=best.dataset.ap; }
+  }
+  (function buildAperture(){
+    apTrack.appendChild(apSpacer());
+    APERTURES.forEach(a=>{ const el=document.createElement('div'); el.className='ap-item';
+      el.textContent='f/'+a; el.dataset.ap=a; el.onclick=()=>centerApItem(el,true); apTrack.appendChild(el); });
+    apTrack.appendChild(apSpacer());
+    let t; apTrack.addEventListener('scroll',()=>{ updateApSel(); clearTimeout(t); t=setTimeout(updateApSel,120); });
+    requestAnimationFrame(()=>{ centerApItem(apTrack.querySelector('.ap-item'),false); updateApSel(); });
+  })();
 
   // burst: hold to capture repeatedly
   let burstTimer=null;
@@ -629,7 +673,8 @@
   }
   function updateInfo(){
     const p=lastPhotos[vIndex]; if(!p) return;
-    vInfo.textContent=(vIndex+1)+' / '+n()+'  ·  '+statusLabel(p.status);
+    const ap = p.aperture ? '  ·  f/'+p.aperture : '';
+    vInfo.textContent=(vIndex+1)+' / '+n()+'  ·  '+statusLabel(p.status)+ap;
     // cache-busted fallback href (the click handler below is the real path)
     vDownload.href='/api/file/'+p.id+'/full?dl='+(p.finished||p.status);
     vDownload.setAttribute('download','fuji_'+p.id+'.jpg');
