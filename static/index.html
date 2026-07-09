@@ -290,6 +290,16 @@
   .sheet-go { background:#ffd60a; color:#000; }
   .sheet-go:disabled { opacity:.5; }
 
+  /* iPhone-style zoom-open transition (thumbnail → fullscreen) */
+  .zoom-bd { position:fixed; inset:0; background:#000; opacity:0; z-index:99; pointer-events:none;
+    transition:opacity .3s ease; }
+  .zoom-bd.show { opacity:1; }
+  .zoomer { position:fixed; z-index:100; object-fit:cover; border-radius:2px; pointer-events:none;
+    will-change:left,top,width,height,border-radius;
+    transition:left .32s cubic-bezier(.22,.61,.36,1), top .32s cubic-bezier(.22,.61,.36,1),
+               width .32s cubic-bezier(.22,.61,.36,1), height .32s cubic-bezier(.22,.61,.36,1),
+               border-radius .32s ease; }
+
   .hidden { display:none !important; }
   canvas { display:none; }
 </style>
@@ -693,7 +703,7 @@
       } else if(p.status==='error'){
         const st=document.createElement('div'); st.className='st'; st.textContent='⚠️'; c.appendChild(st);
       }
-      c.onclick=()=>openViewer(idx);
+      c.onclick=()=>zoomOpenViewer(c, idx);
       grid.appendChild(c);
     });
   }
@@ -822,6 +832,30 @@
     vIndex=i; viewer.classList.add('show'); viewer.style.background='#000';
     for(const k in slides) removeSlide(Number(k));
     W=vstage.clientWidth; ensureWindow(); layout(false); updateInfo();
+  }
+  // iPhone-style: zoom the tapped thumbnail up to fullscreen, then open the viewer
+  function zoomOpenViewer(cell, i){
+    const img=cell.querySelector('img');
+    if(!img){ openViewer(i); return; }
+    const r=img.getBoundingClientRect();
+    const vw=window.innerWidth, vh=window.innerHeight;
+    const iw=img.naturalWidth||r.width, ih=img.naturalHeight||r.height;
+    const sc=Math.min(vw/iw, vh/ih), tw=iw*sc, th=ih*sc;
+    const tx=(vw-tw)/2, ty=(vh-th)/2;
+    const bd=document.createElement('div'); bd.className='zoom-bd';
+    const z=document.createElement('img'); z.className='zoomer'; z.src=img.src;
+    z.style.cssText=`left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;
+    document.body.appendChild(bd); document.body.appendChild(z);
+    requestAnimationFrame(()=>{ bd.classList.add('show');
+      requestAnimationFrame(()=>{ z.style.left=tx+'px'; z.style.top=ty+'px';
+        z.style.width=tw+'px'; z.style.height=th+'px'; z.style.borderRadius='0'; }); });
+    let done=false;
+    const finish=()=>{ if(done)return; done=true;
+      openViewer(i);
+      setTimeout(()=>{ z.remove(); bd.remove(); }, 60);   // let the viewer paint under it
+    };
+    z.addEventListener('transitionend', finish, {once:true});
+    setTimeout(finish, 420);   // fallback
   }
   function closeViewer(){ viewer.classList.remove('show'); viewer.style.background='#000'; }
   vClose.onclick=closeViewer;
