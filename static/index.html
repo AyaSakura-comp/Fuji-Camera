@@ -712,6 +712,21 @@
     catch(_){}
   }
 
+  // pinch the gallery to change columns: pinch in → more (up to 10), spread → fewer (down to 1)
+  const gallery=$('gallery');
+  let gCols=0;   // 0 = follow the CSS default (3 portrait / 5 landscape)
+  function curCols(){ return gCols || getComputedStyle(grid).gridTemplateColumns.split(' ').length; }
+  function setCols(n){ gCols=Math.max(1,Math.min(10,n)); grid.style.gridTemplateColumns='repeat('+gCols+',1fr)'; }
+  let _pd0=0, _pc0=3;
+  const _gd2=t=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  gallery.addEventListener('touchstart',e=>{ if(e.touches.length===2){ _pd0=_gd2(e.touches); _pc0=curCols(); } },{passive:false});
+  gallery.addEventListener('touchmove',e=>{
+    if(e.touches.length===2 && _pd0){ e.preventDefault();
+      setCols(Math.round(_pc0 * (_pd0/_gd2(e.touches))));   // fingers together → more cols
+    }
+  },{passive:false});
+  gallery.addEventListener('touchend',e=>{ if(e.touches.length<2) _pd0=0; });
+
   // upload any photo(s) from the device → open a sheet to pick aperture + prompt
   const galUploadBtn=$('galUploadBtn'), galUpload=$('galUpload');
   const uSheet=$('uSheet'), uPrompt=$('uPrompt'), uCount=$('uCount'), uGo=$('uGo'), uCancel=$('uCancel'), uPreview=$('uPreview');
