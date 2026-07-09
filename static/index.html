@@ -294,11 +294,11 @@
   .zoom-bd { position:fixed; inset:0; background:#000; opacity:0; z-index:99; pointer-events:none;
     transition:opacity .3s ease; }
   .zoom-bd.show { opacity:1; }
-  .zoomer { position:fixed; z-index:100; object-fit:cover; border-radius:2px; pointer-events:none;
-    will-change:left,top,width,height,border-radius;
+  .zoomer { position:fixed; z-index:101; object-fit:cover; border-radius:2px; pointer-events:none;
+    will-change:left,top,width,height,border-radius,opacity;
     transition:left .32s cubic-bezier(.22,.61,.36,1), top .32s cubic-bezier(.22,.61,.36,1),
                width .32s cubic-bezier(.22,.61,.36,1), height .32s cubic-bezier(.22,.61,.36,1),
-               border-radius .32s ease; }
+               border-radius .32s ease, opacity .2s ease; }
 
   .hidden { display:none !important; }
   canvas { display:none; }
@@ -867,7 +867,15 @@
     let done=false;
     const finish=()=>{ if(done)return; done=true;
       openViewer(i);
-      setTimeout(()=>{ z.remove(); bd.remove(); }, 60);   // let the viewer paint under it
+      // keep the (upscaled, soft) thumbnail on top until the full image has loaded,
+      // then fade it out → you see blurry → sharp, no black flash.
+      const remove=()=>{ z.style.opacity='0'; bd.style.opacity='0'; setTimeout(()=>{ z.remove(); bd.remove(); }, 200); };
+      const full=(slides[vIndex]||{}).img;
+      if(full && full.complete && full.naturalWidth){ remove(); }
+      else if(full){ full.addEventListener('load', remove, {once:true});
+                     full.addEventListener('error', remove, {once:true});
+                     setTimeout(remove, 5000); }
+      else { remove(); }
     };
     z.addEventListener('transitionend', finish, {once:true});
     setTimeout(finish, 420);   // fallback
