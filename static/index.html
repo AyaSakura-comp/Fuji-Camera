@@ -555,9 +555,9 @@
   function applyBokeh(f){
     const v=parseFloat(f)||1.2;
     const t=Math.max(0,Math.min(1,(v-1.2)/(16-1.2)));   // 0 at f/1.2 (wide), 1 at f/16
-    const blur = Math.round((1-t)*16);                  // 16px → 0px
-    const inner = Math.round(12 + t*88);                // 12% → 100% (bigger sharp area as f grows)
-    const outer = Math.min(130, inner+30);
+    const blur = Math.round((1-t)*8);                   // 8px → 0px (gentler)
+    const inner = Math.round(22 + t*78);                // 22% → 100% (bigger sharp area as f grows)
+    const outer = Math.min(130, inner+34);
     const st=camView.style;
     st.setProperty('--bk-blur', blur+'px');
     st.setProperty('--bk-inner', inner+'%');
