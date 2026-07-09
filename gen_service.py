@@ -18,6 +18,7 @@ Env:
   FUJI_GEN_PORT  (default 7863)
   FUJI_GEN_STEPS (default 2)
 """
+import base64
 import json
 import os
 import re
@@ -47,14 +48,28 @@ def log(*a):
     print("[gen-service]", *a, flush=True)
 
 
-def prompt_for(aperture: str) -> str:
-    """swap the F-number in the base prompt for the requested aperture (F2.8 etc.)."""
-    if not aperture or not _AP_RE.match(aperture):
-        return PROMPT
-    return re.sub(r"F[0-9.]+", "F" + aperture, PROMPT, count=1)
+def _clean_extra(extra: str) -> str:
+    extra = "".join(ch for ch in (extra or "") if ch >= " " or ch == " ").strip()
+    return extra[:400]
+
+def prompt_for(aperture: str, extra: str = "") -> str:
+    """Build the prompt with aperture-linked depth of field (wide=shallow+bokeh,
+    narrow=deep). A user 'extra' prompt is appended verbatim if given."""
+    ap = aperture if (aperture and _AP_RE.match(aperture)) else "1.2"
+    f = float(ap)
+    if f <= 2.8:
+        dof, bokeh = "shallow depth of field", ", cinematic bokeh"
+    elif f >= 8:
+        dof, bokeh = "deep depth of field, everything in sharp focus", ""
+    else:
+        dof, bokeh = "moderate depth of field", ""
+    p = (f"analog, AnalogRedmAF, F{ap} {dof}, 35mm analog film photo, "
+         f"soft contrast, fine film grain, subtle halation{bokeh}")
+    extra = _clean_extra(extra)
+    return p + ", " + extra if extra else p
 
 
-def run_film_bytes(orig: bytes, aperture: str = "1.2") -> bytes:
+def run_film_bytes(orig: bytes, aperture: str = "1.2", extra: str = "") -> bytes:
     """original image bytes -> processed film PNG bytes (blocks; serialized)."""
     with _gpu_lock:
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
@@ -63,7 +78,7 @@ def run_film_bytes(orig: bytes, aperture: str = "1.2") -> bytes:
         try:
             env = dict(os.environ)
             env["FLUX2_BIG_WMMA_LINEAR"] = "1"
-            cmd = [str(FLUX_PY), str(CREATE_IMG), prompt_for(aperture), "--refcontrol",
+            cmd = [str(FLUX_PY), str(CREATE_IMG), prompt_for(aperture, extra), "--refcontrol",
                    "--steps", STEPS, "--image", tmp]
             proc = subprocess.run(cmd, cwd=str(FLUX_CWD), env=env,
                                   capture_output=True, text=True, timeout=1800)
@@ -109,7 +124,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "empty body"})
             data = self.rfile.read(n)
             aperture = self.headers.get("X-Aperture", "1.2")
-            out = run_film_bytes(data, aperture)
+            extra = ""
+            b64 = self.headers.get("X-Extra-Prompt", "")
+            if b64:
+                try: extra = base64.b64decode(b64).decode("utf-8", "ignore")
+                except Exception: extra = ""
+            out = run_film_bytes(data, aperture, extra)
             self._send(200, out, ctype="image/png")
         except Exception as e:
             import traceback

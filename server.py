@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 from queue import Queue
 
+import base64
 import hashlib
 import hmac
 
@@ -154,10 +155,24 @@ FILM_PROMPT = os.environ.get(
     "soft contrast, fine film grain, subtle halation, cinematic bokeh")
 _AP_RE = re.compile(r"^\d+(\.\d+)?$")
 
-def _prompt_for(aperture):
-    if not aperture or not _AP_RE.match(str(aperture)):
-        return FILM_PROMPT
-    return re.sub(r"F[0-9.]+", "F" + str(aperture), FILM_PROMPT, count=1)
+def _clean_extra(extra):
+    extra = "".join(ch for ch in (extra or "") if ch >= " " or ch == " ").strip()
+    return extra[:400]
+
+def _prompt_for(aperture, extra=""):
+    """aperture-linked depth of field + optional user extra (matches gen_service)."""
+    ap = str(aperture) if (aperture and _AP_RE.match(str(aperture))) else "1.2"
+    f = float(ap)
+    if f <= 2.8:
+        dof, bokeh = "shallow depth of field", ", cinematic bokeh"
+    elif f >= 8:
+        dof, bokeh = "deep depth of field, everything in sharp focus", ""
+    else:
+        dof, bokeh = "moderate depth of field", ""
+    p = (f"analog, AnalogRedmAF, F{ap} {dof}, 35mm analog film photo, "
+         f"soft contrast, fine film grain, subtle halation{bokeh}")
+    extra = _clean_extra(extra)
+    return p + ", " + extra if extra else p
 
 def _gen_ready():
     try:
@@ -166,14 +181,15 @@ def _gen_ready():
     except Exception:
         return False
 
-def run_film(orig_bytes: bytes, aperture: str = "1.2") -> bytes:
+def run_film(orig_bytes: bytes, aperture: str = "1.2", extra: str = "") -> bytes:
     """original image bytes -> processed film image bytes.
     Prefer the host gen service over HTTP (no shared FS); on the host, fall back
     to a local create_image.py subprocess so standalone runs still work."""
     if _gen_ready():
-        req = urllib.request.Request(GEN_URL + "/film", data=orig_bytes,
-                                     headers={"Content-Type": "image/jpeg",
-                                              "X-Aperture": str(aperture)})
+        headers = {"Content-Type": "image/jpeg", "X-Aperture": str(aperture)}
+        if extra:
+            headers["X-Extra-Prompt"] = base64.b64encode(extra.encode()).decode()
+        req = urllib.request.Request(GEN_URL + "/film", data=orig_bytes, headers=headers)
         with urllib.request.urlopen(req, timeout=1800) as r:
             return r.read()
 
@@ -183,7 +199,7 @@ def run_film(orig_bytes: bytes, aperture: str = "1.2") -> bytes:
     try:
         env = dict(os.environ)
         env["FLUX2_BIG_WMMA_LINEAR"] = "1"
-        cmd = [str(FLUX_PY), str(CREATE_IMG), _prompt_for(aperture), "--refcontrol",
+        cmd = [str(FLUX_PY), str(CREATE_IMG), _prompt_for(aperture, extra), "--refcontrol",
                "--steps", GEN_STEPS, "--image", tmp]
         proc = subprocess.run(cmd, cwd=str(FLUX_CWD), env=env,
                               capture_output=True, text=True, timeout=1800)
@@ -215,7 +231,7 @@ def process_one(pid):
     err = None
     try:
         orig_bytes = (ORIG / p["orig"]).read_bytes()
-        result_bytes = run_film(orig_bytes, p.get("aperture", "1.2"))
+        result_bytes = run_film(orig_bytes, p.get("aperture", "1.2"), p.get("extra_prompt", ""))
 
         # deleted while it was processing? discard the result, write nothing.
         with _db_lock:
@@ -318,11 +334,13 @@ def _startup():
     t.start()
 
 @app.post("/api/upload")
-async def upload(request: Request, file: UploadFile = File(...), aperture: str = Form("1.2")):
+async def upload(request: Request, file: UploadFile = File(...),
+                 aperture: str = Form("1.2"), extra_prompt: str = Form("")):
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty upload")
     aperture = aperture if _AP_RE.match(aperture or "") else "1.2"   # validate
+    extra_prompt = _clean_extra(extra_prompt)
     pid = uuid.uuid4().hex[:12]
     orig_name  = f"{pid}.jpg"
     thumb_name = f"{pid}.jpg"
@@ -344,6 +362,7 @@ async def upload(request: Request, file: UploadFile = File(...), aperture: str =
         "orig_thumb": thumb_name,
         "group": getattr(request.state, "group", DEFAULT_GID),   # per-passcode gallery
         "aperture": aperture,
+        "extra_prompt": extra_prompt,
     }
     with _db_lock:
         db = load_db()
