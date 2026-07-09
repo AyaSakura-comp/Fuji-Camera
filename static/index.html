@@ -50,12 +50,24 @@
   /* preview is letterboxed to a FIXED aspect (2:3 portrait / 3:2 landscape) so the
      captured photo is always that ratio and matches what's framed (capture() crops
      to the video element's displayed box). */
-  #video { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  #video, #videoBlur { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
     width:min(100vw, 66.67vh); aspect-ratio:2 / 3; object-fit:cover; background:#000; }
-  #video.mirror { transform:translate(-50%,-50%) scaleX(-1); }
+  #video.mirror, #videoBlur.mirror { transform:translate(-50%,-50%) scaleX(-1); }
   @media (orientation: landscape) {
-    #video { width:min(150vh, 100vw); aspect-ratio:3 / 2; }
+    #video, #videoBlur { width:min(150vh, 100vw); aspect-ratio:3 / 2; }
   }
+  /* fake-bokeh: a blurred copy of the same stream on top, radially masked so a
+     focus circle stays sharp (shows #video underneath). Vars set from the aperture. */
+  #videoBlur { z-index:1; background:transparent; pointer-events:none;
+    filter:blur(var(--bk-blur, 0px));
+    -webkit-mask-image:radial-gradient(circle at var(--bk-x,50%) var(--bk-y,45%),
+      transparent 0%, transparent var(--bk-inner,100%), #000 var(--bk-outer,120%));
+            mask-image:radial-gradient(circle at var(--bk-x,50%) var(--bk-y,45%),
+      transparent 0%, transparent var(--bk-inner,100%), #000 var(--bk-outer,120%)); }
+  .focus-ring { position:absolute; z-index:13; width:74px; height:74px; border:2px solid #ffd60a;
+    border-radius:10px; transform:translate(-50%,-50%) scale(1.35); opacity:0; pointer-events:none;
+    transition:opacity .15s ease, transform .2s ease; }
+  .focus-ring.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
 
   .cam-bottom {
     position:absolute; left:0; right:0;
@@ -264,6 +276,8 @@
   </div>
 
   <video id="video" autoplay playsinline muted></video>
+  <video id="videoBlur" playsinline muted></video>
+  <div class="focus-ring" id="focusRing"></div>
   <div id="flash"></div>
   <div id="msg"></div>
 
@@ -385,7 +399,7 @@
   // =====================================================================
   //  CAMERA
   // =====================================================================
-  const video=$('video'), startEl=$('start'), startBtn=$('startBtn');
+  const video=$('video'), videoBlur=$('videoBlur'), focusRing=$('focusRing'), startEl=$('start'), startBtn=$('startBtn');
   const camTop=$('camTop'), camBottom=$('camBottom');
   const lensesEl=$('lenses'), zoomWrap=$('zoomWrap'), zoom=$('zoom'), zoomVal=$('zoomVal');
   const switchBtn=$('switchBtn'), shutter=$('shutterBtn'), burstBtn=$('burstBtn');
@@ -396,7 +410,7 @@
 
   const showMsg=t=>{msg.textContent=t;msg.style.display='block';};
   const hideMsg=()=>{msg.style.display='none';};
-  function stopStream(){ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;} curTrack=null; }
+  function stopStream(){ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;} curTrack=null; videoBlur.srcObject=null; }
 
   function classify(label){
     const raw=label||'', l=raw.toLowerCase();
@@ -477,10 +491,12 @@
       catch(e2){ startEl.classList.remove('hidden');   // fallback: show the tap-to-open page
         showMsg('無法開啟相機：'+(e2.name||e2.message)); return; } }
     video.srcObject=stream; curTrack=stream.getVideoTracks()[0];
+    videoBlur.srcObject=stream;                              // same stream, blurred layer
     const s=curTrack.getSettings?curTrack.getSettings():{}; if(s.deviceId)curDeviceId=s.deviceId;
-    video.classList.toggle('mirror',facing==='user');
+    video.classList.toggle('mirror',facing==='user'); videoBlur.classList.toggle('mirror',facing==='user');
     startEl.classList.add('hidden'); camBottom.classList.remove('hidden'); camTop.classList.remove('hidden');
     try{await video.play();}catch(_){}
+    try{await videoBlur.play();}catch(_){}
     await refreshLenses(); setupZoom();
   }
   startBtn.onclick=()=>startCamera();
@@ -532,8 +548,42 @@
       const r=el.getBoundingClientRect(), d=Math.abs((r.left+r.right)/2-cx);
       el.classList.remove('sel'); if(d<bd){bd=d;best=el;}
     });
-    if(best){ best.classList.add('sel'); currentAperture=best.dataset.ap; }
+    if(best){ best.classList.add('sel'); currentAperture=best.dataset.ap; applyBokeh(currentAperture); }
   }
+
+  // ---------- fake bokeh: aperture drives the blur strength + focus-circle size ----------
+  function applyBokeh(f){
+    const v=parseFloat(f)||1.2;
+    const t=Math.max(0,Math.min(1,(v-1.2)/(16-1.2)));   // 0 at f/1.2 (wide), 1 at f/16
+    const blur = Math.round((1-t)*16);                  // 16px → 0px
+    const inner = Math.round(12 + t*88);                // 12% → 100% (bigger sharp area as f grows)
+    const outer = Math.min(130, inner+30);
+    const st=camView.style;
+    st.setProperty('--bk-blur', blur+'px');
+    st.setProperty('--bk-inner', inner+'%');
+    st.setProperty('--bk-outer', outer+'%');
+  }
+  function setFocusPoint(cx,cy){
+    const r=video.getBoundingClientRect();
+    let xp=Math.max(0,Math.min(100,((cx-r.left)/r.width)*100));
+    let yp=Math.max(0,Math.min(100,((cy-r.top)/r.height)*100));
+    const mx=(facing==='user')?100-xp:xp;               // front cam is mirrored
+    camView.style.setProperty('--bk-x', mx+'%');
+    camView.style.setProperty('--bk-y', yp+'%');
+    focusRing.style.left=cx+'px'; focusRing.style.top=cy+'px';
+    focusRing.classList.remove('show'); void focusRing.offsetWidth; focusRing.classList.add('show');
+    clearTimeout(setFocusPoint._t); setFocusPoint._t=setTimeout(()=>focusRing.classList.remove('show'),900);
+  }
+  // tap the preview (single quick tap, not a control / not a pinch) → set focus point
+  let _fx,_fy,_ft,_fmoved;
+  camView.addEventListener('touchstart',e=>{ if(e.touches.length===1){const t=e.touches[0];_fx=t.clientX;_fy=t.clientY;_ft=Date.now();_fmoved=false;} },{passive:true});
+  camView.addEventListener('touchmove',e=>{ if(e.touches.length===1){const t=e.touches[0]; if(Math.abs(t.clientX-_fx)>10||Math.abs(t.clientY-_fy)>10)_fmoved=true;} },{passive:true});
+  camView.addEventListener('touchend',e=>{
+    if(e.changedTouches.length!==1||_fmoved||Date.now()-_ft>=300) return;
+    const t=e.changedTouches[0], el=document.elementFromPoint(t.clientX,t.clientY);
+    if(el&&el.closest('.cam-bottom, .cam-top, #start, .tabbar, .btn, .ap-item, .aperture')) return;
+    setFocusPoint(t.clientX,t.clientY);
+  });
   (function buildAperture(){
     apTrack.appendChild(apSpacer());
     APERTURES.forEach(a=>{ const el=document.createElement('div'); el.className='ap-item';
